@@ -12,9 +12,25 @@ Version 2 replays the Tour de France 2026 stage 16 time trial (Évian to Thonon,
 4. **Calibration and validation** (`calibration.py`). Sector powers inverted from published splits, CP fitted so that the real effort empties W', leave-one-checkpoint-out validation with errors in seconds and in percent of sector time.
 5. **Physiology** (`physiology.py`). Mean-maximal power curves, CP and W' by the two-parameter model, and a test of Skiba's W'bal on GoldenCheetah OpenData (CC0).
 6. **Optimiser v2** (`optimizer.py`). Equilibrium block optimiser for the structure, then SLSQP polish on the dynamic simulator with a smoothing penalty. Under 20 s for a 26 km course at 500 m blocks.
-7. **Streamlit app** (`app.py`). GPX upload or stage 16 demo, date and time for the weather, rider profile (manual or fitted from a power file), map with target power and wind arrows, strategy comparison, CSV and .zwo export.
+7. **Learned model** (`dataset.py`, `ml_model.py`). Physics residual learned on GoldenCheetah OpenData segments, validated on unseen rides and unseen athletes, tested on the stage 16 professionals.
+8. **Dashboard** (`app.py`). Team-staff dashboard: predicted time (physics and learned model, with domain warning), optimal block plan, W' balance, section times, map with wind, validation tables, assumptions, CSV and .zwo export.
 
 The v1 engine (`pacing_model.py`: `Rider`, `Environment`, `Course`, `simulate`, `optimize_pacing`) is unchanged and still used for the initial plan. `Environment` now also accepts per-segment arrays.
+
+## Learned model: physics corrected by data
+
+`dataset.py` turns GoldenCheetah OpenData rides (CC0, power meter, 1 Hz) into 200 m segments: mean power, grade, altitude, entry speed, power variability, pedalling fraction, elapsed time, rider mass, and the observed segment time. Archives are streamed from OSF and deleted after processing (the full dataset is about 200 GB). Only segments that look like a time-trial effort are used for training: continuous pedalling, steady power, above 100 W and 5 m/s.
+
+`ml_model.py` fits each athlete's CdA and Crr from their own segments (the physical profile), then trains a gradient boosting model (scikit-learn HistGradientBoosting) on the residual between observed speed and the Martin-model speed, using only inputs known when planning a race. The athlete identity is never a feature, so the model must generalise to unseen riders. Prediction on a course chains the entry speed from one segment to the next.
+
+Current training set: 774,396 time-trial-like segments from 24 athletes (the stream keeps adding athletes; retrain with `python examples/train_hybrid.py`).
+
+| Test set | 10 km windows | Time error, physics only | Time error, learned model | p90 | Bias |
+|---|---|---|---|---|---|
+| Unseen rides of known athletes | 215 | 5.09 % | **0.78 %** | 1.83 % | +0.08 % |
+| Unseen athletes | 17 | 16.36 % | **3.27 %** | 5.13 % | -0.46 % |
+
+On the stage 16 professionals, under the same leave-one-checkpoint-out protocol, the learned model is worse than the calibrated physics (16.2 s against 5.3 s, bias +15.7 s): riders at 6.5 W/kg with a 0.21 m² CdA are outside the training domain (2 to 6 W/kg, CdA above 0.3) and the model has no wind or corners. The dashboard flags this: the physics plan stays the reference for elite riders, the learned model gives its interval inside its domain and improves as athletes are added. Run `python examples/validate_hybrid_pro.py` to reproduce.
 
 ## Results on Tour de France 2026, stage 16
 
@@ -75,6 +91,9 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 pytest                                  # 44 tests, about 1 minute
 streamlit run app.py                    # dashboard with the stage 16 demo
+python dataset.py 250                   # stream 250 OpenData athletes into 200 m segments
+python examples/train_hybrid.py         # train and validate the learned model
+python examples/validate_hybrid_pro.py  # learned model against the stage 16 splits
 python examples/phase1_course.py        # course checks and profile figure
 python examples/phase2_weather.py       # weather table and figure
 python examples/phase4_calibration.py   # sector powers, validation, sensitivity
@@ -112,7 +131,10 @@ dynamics.py         dynamic simulator (numba kernel)
 calibration.py      split inversion, CP fit, leave-one-out validation
 physiology.py       MMP curves, CP/W' fit, W'bal test
 optimizer.py        block optimiser v2
-app.py              Streamlit v2 (v1 dashboard kept in examples/app_v1.py)
+dataset.py          OpenData rides -> 200 m segments (streamed)
+ml_model.py         physical profile per athlete + residual gradient boosting
+app.py              team dashboard (v1 kept in examples/app_v1.py)
+models/             trained model metrics and athlete profiles
 examples/           phase scripts and the original stage 16 replay
 data/raw/           cached downloads, never edited
 data/processed/     cleaned data with sources (see its README)

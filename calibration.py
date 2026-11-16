@@ -120,7 +120,8 @@ def _sector_indices(seg, km_start, km_end):
 
 
 def invert_sector_powers(seg, rider: Rider, env: Environment, checkpoints,
-                         params: DynamicsParams | None = None, p_lo=0.0, p_hi=1000.0):
+                         params: DynamicsParams | None = None, p_lo=0.0, p_hi=1000.0,
+                         simulate_fn=None):
     """checkpoints : liste de (km, temps cumule s), croissante. Renvoie la
     liste des SectorFit et le vecteur de puissance par segment.
 
@@ -128,6 +129,9 @@ def invert_sector_powers(seg, rider: Rider, env: Environment, checkpoints,
     que la vitesse d'entree dans le secteur soit celle de la simulation.
     """
     params = params or DynamicsParams()
+    if simulate_fn is None:
+        def simulate_fn(pw):
+            return simulate_dynamic(pw, seg, rider, env, params).seg_time_s
     powers = np.zeros(seg.n)
     fits, prev_km, prev_t = [], 0.0, 0.0
     for km, t_cum in checkpoints:
@@ -136,8 +140,7 @@ def invert_sector_powers(seg, rider: Rider, env: Environment, checkpoints,
 
         def cum_time(p):
             powers[idx] = p
-            r = simulate_dynamic(powers, seg, rider, env, params)
-            return r.seg_time_s[: last + 1].sum() - t_cum
+            return simulate_fn(powers)[: last + 1].sum() - t_cum
 
         if cum_time(p_hi) > 0:
             p = p_hi
@@ -173,7 +176,7 @@ def calibrate_cp(powers, seg, rider: Rider, env: Environment, params=None,
 # Validation croisee par pointage omis
 # ---------------------------------------------------------------------------
 
-def leave_one_out(seg, rider: Rider, env: Environment, checkpoints, params=None):
+def leave_one_out(seg, rider: Rider, env: Environment, checkpoints, params=None, simulate_fn=None):
     """Pour chaque pointage intermediaire omis : recalage sur les autres puis
     prediction du temps cumule au pointage omis. Renvoie un DataFrame
     (km, reel, predit, erreur s, erreur % du temps de secteur)."""
@@ -183,11 +186,11 @@ def leave_one_out(seg, rider: Rider, env: Environment, checkpoints, params=None)
         return pd.DataFrame(rows)
     for k in range(len(checkpoints) - 1):      # on ne peut pas omettre l'arrivee
         kept = [c for j, c in enumerate(checkpoints) if j != k]
-        _, powers = invert_sector_powers(seg, rider, env, kept, params)
-        r = simulate_dynamic(powers, seg, rider, env, params)
+        _, powers = invert_sector_powers(seg, rider, env, kept, params, simulate_fn=simulate_fn)
+        seg_t = simulate_fn(powers) if simulate_fn else simulate_dynamic(powers, seg, rider, env, params).seg_time_s
         km, t_real = checkpoints[k]
         idx = seg.slice_km(0.0, km)
-        t_pred = r.seg_time_s[: idx[-1] + 1].sum()
+        t_pred = seg_t[: idx[-1] + 1].sum()
         prev_t = checkpoints[k - 1][1] if k > 0 else 0.0
         next_t = checkpoints[k + 1][1]
         rows.append({"km": km, "t_real_s": t_real, "t_pred_s": t_pred,
@@ -257,3 +260,16 @@ def descent_tradeoff(seg, rider: Rider, env: Environment, checkpoints, params: D
         fits, _ = invert_sector_powers(seg, rider, env, checkpoints, replace(params, a_lat_max=a))
         rows.append({"a_lat": a, **{f"P {f.km_start:.1f}-{f.km_end:.1f}": f.power_w for f in fits}})
     return pd.DataFrame(rows)
+
+
+def hybrid_simulate_fn(model, seg, rider: Rider):
+    """Simulateur du modele appris, meme signature que la physique dynamique
+    (puissances par segment -> temps par segment). Sans meteo ni virages :
+    c'est une prediction "conditions moyennes des sorties d'entrainement"."""
+    from ml_model import predict_course_fast
+    profile = {"mass_kg": rider.mass_rider, "cda": rider.cda, "crr": rider.crr}
+
+    def fn(pw):
+        t, _ = predict_course_fast(model, seg, pw, profile, cp_w=rider.cp)
+        return t
+    return fn

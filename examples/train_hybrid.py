@@ -15,7 +15,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from dataset import load_segments  # noqa: E402
-from ml_model import prepare, train, split_rides, evaluate, MODEL_DIR  # noqa: E402
+from ml_model import prepare, train, split_rides, evaluate, tt_like, MODEL_DIR  # noqa: E402
 
 
 def main(max_segments_per_athlete: int | None = None):
@@ -26,6 +26,8 @@ def main(max_segments_per_athlete: int | None = None):
     print(f"{len(seg):,} segments, {seg.athlete.nunique()} athletes, {seg.groupby(['athlete', 'ride']).ngroups:,} sorties, "
           f"{seg.length_m.sum() / 1e3:,.0f} km")
     df, profiles = prepare(seg)
+    n_all = len(df); df = tt_like(df)
+    print(f"segments type CLM : {len(df):,} / {n_all:,} ({len(df) / n_all * 100:.0f} %)")
     prof = pd.DataFrame(profiles).T
     print(f"profils : CdA mediane {prof.cda.median():.3f} [{prof.cda.quantile(.1):.3f}-{prof.cda.quantile(.9):.3f}], "
           f"Crr mediane {prof.crr.median():.4f}, CP/kg mediane {(prof.cp_w / prof.mass_kg).median():.2f}")

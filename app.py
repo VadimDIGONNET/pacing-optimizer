@@ -45,16 +45,16 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap');
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.block-container { padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1500px; }
+.block-container { padding-top: 3.2rem; padding-bottom: 2rem; max-width: 1500px; }
 h1, h2, h3 { letter-spacing: -0.01em; }
 .hero { display:flex; justify-content:space-between; align-items:flex-end; border-bottom:1px solid #1F2A44; padding-bottom:12px; margin-bottom:18px; }
 .hero .t { font-size:30px; font-weight:700; color:#F8FAFC; }
 .hero .s { color:#94A3B8; font-size:14px; margin-top:2px; }
 .hero .tag { background:#0F2A2B; color:#2DD4BF; border:1px solid #1E4A47; border-radius:999px; padding:4px 12px; font-size:12px; font-weight:600; }
-.kpis { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap:12px; margin: 6px 0 18px 0; }
+.kpis { display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:12px; margin: 6px 0 18px 0; }
 .kpi { background:linear-gradient(180deg,#121C33 0%,#0F172A 100%); border:1px solid #1F2A44; border-radius:12px; padding:14px 16px; }
 .kpi .l { color:#94A3B8; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
-.kpi .v { font-family:'JetBrains Mono', monospace; font-size:26px; font-weight:500; color:#F8FAFC; margin-top:4px; }
+.kpi .v { font-family:'JetBrains Mono', monospace; font-size:22px; font-weight:500; color:#F8FAFC; margin-top:4px; white-space:nowrap; }
 .kpi .d { font-size:12px; color:#2DD4BF; margin-top:2px; }
 .kpi .d.warn { color:#F59E0B; }
 .kpi .d.muted { color:#94A3B8; }
@@ -121,7 +121,7 @@ def weather_arrays(day: str, when: str, lats, lons, dists, mid_ele, bearing, mid
 @st.cache_data(show_spinner=False)
 def load_validation_tables():
     out = {}
-    for name in ("stage16_loo", "stage16_strategies", "stage16_sectors"):
+    for name in ("stage16_loo", "stage16_strategies", "stage16_sectors", "stage16_loo_hybrid"):
         p = ROOT / f"reports/tables/{name}.csv"
         if p.exists():
             out[name] = pd.read_csv(p)
@@ -133,6 +133,20 @@ def load_validation_tables():
 
 model, metrics = load_model()
 tables = load_validation_tables()
+
+
+@st.cache_data(show_spinner=False)
+def training_domain():
+    p = MODEL_DIR / "profiles.json"
+    if not p.exists():
+        return None
+    prof = pd.DataFrame(json.load(open(p))).T
+    prof = prof[prof.cp_w.notna() & (prof.mass_kg > 0)]
+    wkg = prof.cp_w / prof.mass_kg
+    return {"wkg_max": float(wkg.quantile(0.95)), "cda_min": float(prof.cda.quantile(0.05)), "n": int(len(prof))}
+
+
+domain = training_domain()
 
 # ---------------------------------------------------------------------------
 # Barre laterale : entrees
@@ -248,15 +262,18 @@ err_pct = ho.get("mae_pct_hybrid")
 cards = [
     kpi("Temps prédit, plan optimal", fmt(opt.result.time_s), f"physique dynamique · {opt.result.avg_speed_kmh:.1f} km/h"),
 ]
+out_of_domain = bool(domain and (cp / mass_rider > domain["wkg_max"] or cda < domain["cda_min"]))
 if hyb:
     cards.append(kpi("Temps prédit, modèle appris", fmt(hyb["time_s"]),
-                     f"± {err_pct:.1f} % (athlètes inconnus, 10 km)" if err_pct else "modèle hybride", "muted"))
+                     "hors du domaine d'entraînement : indicatif" if out_of_domain else
+                     (f"± {err_pct:.1f} % (athlètes inconnus, 10 km)" if err_pct else "modèle hybride"),
+                     "warn" if out_of_domain else "muted"))
 cards.append(kpi("Gain vs puissance constante", f"{opt.gain_s:+.1f} s", f"constante {opt.p_constant:.0f} W → {fmt(opt.constant.time_s)}"))
 if real is not None:
     cards.append(kpi("Stratégie réelle reconstruite", fmt(real.time_s), f"{real.time_s - opt.result.time_s:+.1f} s vs plan optimal", "warn"))
 cards.append(kpi("Puissance moyenne du plan", f"{opt.result.avg_power:.0f} W", f"{opt.result.avg_power / mass_rider:.2f} W/kg · CP {cp:.0f} W", "muted"))
 if s0 is not None:
-    cards.append(kpi("Conditions", f"{s0.temp_c:.0f} °C · {s0.wind10_ms:.1f} m/s", f"ρ {np.mean(env.rho):.3f} kg/m³ · vent de face moyen {np.average(env.wind_ms, weights=seg.length_m):+.1f} m/s", "muted"))
+    cards.append(kpi("Conditions", f"{s0.temp_c:.0f} °C · {s0.wind10_ms:.1f} m/s", f"ρ {np.mean(env.rho):.3f} · face {np.average(env.wind_ms, weights=seg.length_m):+.1f} m/s", "muted"))
 st.markdown(f'<div class="kpis">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
@@ -348,7 +365,15 @@ with tab_pred:
             <b>{ho.get('mae_pct_hybrid', float('nan')):.2f} %</b> contre {ho.get('mae_pct_physics', float('nan')):.2f} % pour la physique seule
             (p90 {ho.get('p90_pct_hybrid', float('nan')):.2f} %). Il ne connaît ni le vent du jour ni les virages : la physique dynamique reste la
             référence pour le plan, le modèle appris donne l'intervalle réaliste.</div>""", unsafe_allow_html=True)
-        if hyb and real is not None:
+        if hyb and out_of_domain:
+            st.markdown(f"""<div class="note"><b>Coureur hors du domaine d'entraînement.</b> Le modèle appris a vu des athlètes jusqu'à
+            {domain['wkg_max']:.1f} W/kg de CP et un CdA minimal de {domain['cda_min']:.2f} m² ({domain['n']} profils). À {cp / mass_rider:.1f} W/kg
+            et {cda:.2f} m², sa prédiction est une extrapolation : sur les pointages pro de l'étape 16 elle est biaisée de
+            {tables['stage16_loo_hybrid'][tables['stage16_loo_hybrid'].model == 'hybride'].err_s.mean():+.0f} s par pointage
+            (physique dynamique : {tables['stage16_loo_hybrid'][tables['stage16_loo_hybrid'].model == 'physique'].err_s.mean():+.0f} s).
+            Le plan et le temps de référence restent ceux de la physique dynamique.</div>""" if "stage16_loo_hybrid" in tables else
+            "<div class='note'>Coureur hors du domaine d'entraînement du modèle appris : prédiction indicative.</div>", unsafe_allow_html=True)
+        elif hyb and real is not None:
             st.caption(f"Écart entre les deux modèles : {hyb['time_s'] - opt.result.time_s:+.1f} s.")
 
 with tab_map:
@@ -409,6 +434,19 @@ with tab_val:
                 fig4.add_trace(go.Bar(x=g.km.astype(str) + " km", y=g.err_s, name=r_name))
             fig4.update_layout(**PLOT_LAYOUT, height=320, barmode="group", title="Erreur de prédiction par coureur et pointage (s)", yaxis=dict(gridcolor="#1F2A44"))
             st.plotly_chart(fig4, use_container_width=True)
+    if "stage16_loo_hybrid" in tables:
+        lh = tables["stage16_loo_hybrid"]
+        st.markdown('<div class="sec">Étape 16 : physique dynamique contre modèle appris, même protocole</div>', unsafe_allow_html=True)
+        comp = lh.groupby("model").agg(MAE_s=("err_s", lambda e: e.abs().mean()), MAE_pct=("err_pct_sector", lambda e: e.abs().mean()),
+                                       biais_s=("err_s", "mean"), n=("err_s", "size")).round(2).reset_index()
+        comp.columns = ["Modèle", "MAE (s)", "MAE (% secteur)", "Biais (s)", "n"]
+        c1, c2 = st.columns([2, 3])
+        c1.dataframe(comp, hide_index=True, use_container_width=True)
+        c2.markdown("""<div class="note">Le modèle appris est entraîné sur des amateurs et des cyclistes entraînés (2 à 6 W/kg), sans vent ni
+        virages explicites. Sur des professionnels à 6,5 W/kg il extrapole et prédit des montées trop lentes : la physique calibrée reste
+        la référence pour l'élite, le modèle appris apporte sa précision dans son domaine (sorties inconnues : voir ci-dessus) et
+        s'améliore avec chaque athlète ajouté au jeu.</div>""", unsafe_allow_html=True)
+
     if "stage16_strategies" in tables:
         s16 = tables["stage16_strategies"]
         st.markdown('<div class="sec">Étape 16 : stratégie réelle, constante et optimale (top 10)</div>', unsafe_allow_html=True)

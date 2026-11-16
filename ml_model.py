@@ -67,6 +67,15 @@ def physics_speed(power_w, grade, alt_m, mass_kg, cda, crr, bike_kg=9.0):
     return v
 
 
+def tt_like(seg: pd.DataFrame) -> pd.DataFrame:
+    """Segments comparables a un effort de contre-la-montre : pedalage continu
+    (> 90 % du temps), effort stable (ecart-type < 35 % de la moyenne),
+    puissance > 100 W, vitesse > 5 m/s. Ecarte les arrets, le trafic, les
+    descentes en roue libre et une bonne part du roulage en groupe, qui
+    n'existent pas dans un CLM et fausseraient le residu appris."""
+    return seg[(seg.pedal_frac > 0.9) & (seg.power_w > 100) & (seg.power_sd < 0.35 * seg.power_w) & (seg.speed_ms > 5.0)]
+
+
 # ---------------------------------------------------------------------------
 # 1. Profil physique par athlete
 # ---------------------------------------------------------------------------
