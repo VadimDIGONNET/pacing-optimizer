@@ -206,16 +206,22 @@ def constant_power_target(course: Course, rider: Rider, env: Environment) -> flo
     return brentq(end_wbal, rider.cp, rider.p_max, xtol=0.1)
 
 
-def optimize_pacing(course: Course, rider: Rider, env: Environment) -> PacingResult:
+def optimize_pacing(course: Course, rider: Rider, env: Environment,
+                    bounds=None) -> PacingResult:
     """Repartition de puissance minimisant le temps, a W' identique.
 
     Probleme d'optimisation sous contrainte : minimiser le temps total, en
     maintenant le bilan de W' positif partout (on ne peut pas depenser plus
     d'energie anaerobie qu'on n'en possede).
+
+    bounds : liste optionnelle de couples (p_min, p_max) par segment. Un couple
+    (p, p) fige la puissance, utile sur une descente technique que le modele
+    physique ne sait pas representer (virages, freinages).
     """
     p0 = constant_power_target(course, rider, env)
-    x0 = np.full(course.n, p0)
-    bounds = [(rider.p_min, rider.p_max)] * course.n
+    if bounds is None:
+        bounds = [(rider.p_min, rider.p_max)] * course.n
+    x0 = np.clip(np.full(course.n, p0), [b[0] for b in bounds], [b[1] for b in bounds])
     constraints = [{
         "type": "ineq",
         "fun": lambda p: simulate(p, course, rider, env).min_wbal_j,
