@@ -57,9 +57,25 @@ class Rider:
 
 @dataclass
 class Environment:
-    """Conditions exterieures. wind_ms > 0 = vent de face."""
+    """Conditions exterieures. wind_ms > 0 = vent de face.
+
+    rho et wind_ms acceptent un scalaire (meme valeur partout) ou un tableau
+    avec une valeur par segment (meteo reelle, voir weather.py). `at(i)`
+    renvoie les conditions scalaires du segment i.
+    """
     rho: float = RHO_SEA_LEVEL
     wind_ms: float = 0.0
+
+    @property
+    def is_scalar(self) -> bool:
+        return np.ndim(self.rho) == 0 and np.ndim(self.wind_ms) == 0
+
+    def at(self, i: int) -> "Environment":
+        if self.is_scalar:
+            return self
+        rho = self.rho if np.ndim(self.rho) == 0 else float(self.rho[i])
+        wind = self.wind_ms if np.ndim(self.wind_ms) == 0 else float(self.wind_ms[i])
+        return Environment(rho=rho, wind_ms=wind)
 
 
 @dataclass
@@ -150,11 +166,15 @@ def speed_from_power(power: float, grade: float, rider: Rider, env: Environment)
         f_aero = 0.5 * env.rho * rider.cda * (v + env.wind_ms) ** 2
         return (f_roll_grav + f_aero) * v / DRIVETRAIN_EFF - power
 
-    lo, hi = 0.01, 30.0
+    lo, hi = 0.01, 60.0
     # En forte montee avec faible puissance, meme la vitesse plancher "coute"
     # deja plus que la puissance fournie : on renvoie cette vitesse plancher.
     if net(lo) > 0:
         return lo
+    # En forte descente avec vent arriere, la vitesse d'equilibre peut depasser
+    # la borne : on la plafonne (216 km/h, jamais atteint en pratique).
+    if net(hi) < 0:
+        return hi
     return brentq(net, lo, hi, xtol=1e-4)
 
 
@@ -169,8 +189,8 @@ def simulate(powers, course: Course, rider: Rider, env: Environment) -> PacingRe
     min_wbal = rider.w_prime
     seg_time, speeds, wbal_track = [], [], []
 
-    for p, length, grade in zip(powers, course.length_m, course.grade):
-        v = speed_from_power(p, grade, rider, env)
+    for i, (p, length, grade) in enumerate(zip(powers, course.length_m, course.grade)):
+        v = speed_from_power(p, grade, rider, env.at(i))
         t = length / v
         if p > rider.cp:
             wbal -= (p - rider.cp) * t
