@@ -50,12 +50,12 @@ def test_accepts_plain_course_and_vector_environment():
 
 def test_corner_limits_speed_and_applied_power():
     rider, env = Rider(cp=300), Environment()
-    seg = _straight_with_corner()
+    seg = _straight_with_corner(radius=10.0)       # v_max = 7,7 m/s, bien sous l'equilibre
     params = DynamicsParams(a_lat_max=6.0, road_width_m=0.0, v_start=None)
     free = simulate_dynamic(np.full(seg.n, 350.0), seg, rider, env,
                             DynamicsParams(a_lat_max=1e6, v_start=None), keep_trace=True)
     lim = simulate_dynamic(np.full(seg.n, 350.0), seg, rider, env, params, keep_trace=True)
-    v_corner = np.sqrt(6.0 * 25.0)
+    v_corner = np.sqrt(6.0 * 10.0)
     assert lim.time_s > free.time_s
     assert lim.speed_ms[20] <= v_corner + 0.05
     assert lim.braking[19] or lim.braking[20]
