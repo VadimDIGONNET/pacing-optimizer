@@ -5,3 +5,6 @@ venv/
 .streamlit/secrets.toml
 .DS_Store
 .pytest_cache/
+# donnees brutes volumineuses (OpenData CC0, 200 Mo : a retelecharger avec le script)
+data/raw/opendata/*.zip
+data/raw/gpx/_upload.gpx

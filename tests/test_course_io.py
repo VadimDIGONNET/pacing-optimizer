@@ -50,12 +50,14 @@ def test_segment_lengths_and_grades_consistent():
     assert seg.bearing_deg == pytest.approx(np.full(10, 90.0), abs=0.5)   # vers l'est
 
 
+@pytest.fixture(scope="module")
+def seg():
+    track = load_gpx(GPX)
+    return track, segment_track(track, step_m=50.0, ele=smooth_elevation(track))
+
+
 @pytest.mark.skipif(not GPX.exists(), reason="GPX non telecharge")
 class TestStage16:
-    @pytest.fixture(scope="class")
-    def seg(self):
-        track = load_gpx(GPX)
-        return track, segment_track(track, step_m=50.0, ele=smooth_elevation(track))
 
     def test_distance_within_1pct(self, seg):
         _, s = seg

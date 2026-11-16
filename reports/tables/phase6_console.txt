@@ -1,0 +1,18 @@
+Remco Evenepoel      CP 430 W | reel 32'19.0" | constant 451 W 32'16.3" | optimal 32'02.4" | gain vs reel +16.6 s, vs constant +13.9 s (4 pointages, 31 s calcul)
+Tadej Pogacar        CP 439 W | reel 32'47.0" | constant 459 W 32'36.2" | optimal 32'21.9" | gain vs reel +25.1 s, vs constant +14.3 s (4 pointages, 32 s calcul)
+Mattias Skjelmose    CP 418 W | reel 33'23.0" | constant 438 W 33'18.4" | optimal 33'03.4" | gain vs reel +19.6 s, vs constant +15.0 s (4 pointages, 31 s calcul)
+Paul Seixas          CP 417 W | reel 33'35.0" | constant 438 W 33'20.0" | optimal 33'05.5" | gain vs reel +29.5 s, vs constant +14.5 s (3 pointages, 31 s calcul)
+Isaac del Toro       CP 404 W | reel 33'40.0" | constant 424 W 33'38.5" | optimal 33'23.3" | gain vs reel +16.7 s, vs constant +15.2 s (2 pointages, 31 s calcul)
+Mattia Cattaneo      CP 423 W | reel 34'01.0" | constant 442 W 33'45.0" | optimal 33'29.6" | gain vs reel +31.4 s, vs constant +15.4 s (2 pointages, 32 s calcul)
+Thymen Arensman      CP 419 W | reel 34'06.1" | constant 438 W 34'06.1" | optimal 33'50.7" | gain vs reel +15.5 s, vs constant +15.5 s (1 pointages, 31 s calcul)
+Bruno Armirail       CP 431 W | reel 34'14.0" | constant 450 W 34'14.0" | optimal 33'58.8" | gain vs reel +15.3 s, vs constant +15.3 s (1 pointages, 31 s calcul)
+Pablo Castrillo      CP 433 W | reel 34'19.0" | constant 453 W 34'19.0" | optimal 34'03.1" | gain vs reel +15.9 s, vs constant +15.9 s (1 pointages, 31 s calcul)
+Joshua Tarling       CP 463 W | reel 34'20.8" | constant 482 W 34'20.8" | optimal 34'05.9" | gain vs reel +14.8 s, vs constant +14.8 s (1 pointages, 31 s calcul)
+
+Coureurs avec pointages complets : gain moyen vs strategie reelle +20.4 s, vs constante +14.4 s
+Secteurs (W, moyenne ponderee) :
+            rider  P_opt 0.0-9.6  P_real 0.0-9.6  P_opt 9.6-10.9  P_real 9.6-10.9  P_opt 10.9-17.0  P_real 10.9-17.0  P_opt 17.0-26.1  P_real 17.0-26.1
+  Remco Evenepoel          454.0           456.0           430.0            404.0            390.0             402.0            460.0             447.0
+    Tadej Pogacar          463.0           465.0           440.0            417.0            393.0             415.0            468.0             435.0
+Mattias Skjelmose          441.0           432.0           420.0            425.0            368.0             425.0            447.0             451.0
+Figure : reports/figures/stage16_strategies.png ; plan : reports/tables/stage16_plan_evenepoel.csv

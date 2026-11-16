@@ -48,6 +48,17 @@ import numpy as np
 from pacing_model import (G, DRIVETRAIN_EFF, Rider, Environment, Course,
                           speed_from_power)
 
+try:   # numba accelere le noyau d'integration d'un facteur ~100 ; optionnel
+    from numba import njit
+    HAS_NUMBA = True
+except ImportError:   # pragma: no cover
+    HAS_NUMBA = False
+
+    def njit(*args, **kwargs):
+        def deco(f):
+            return f
+        return deco if not (args and callable(args[0])) else args[0]
+
 
 @dataclass
 class DynamicsParams:
@@ -197,9 +208,7 @@ def fine_speed_limit(seg, params: DynamicsParams):
     theta = np.arctan(seg.grade)
     a_eff = np.maximum(params.a_brake_max + G * np.sin(theta), 0.5)[seg_idx]
     ds = np.diff(s_nodes)
-    v = cap.copy()
-    for j in range(len(ds) - 1, -1, -1):
-        v[j] = min(v[j], np.sqrt(v[j + 1] ** 2 + 2.0 * a_eff[j] * ds[j]))
+    v = _backward_limit(cap, a_eff, ds)
     return s_nodes, v, seg_idx
 
 
@@ -211,6 +220,69 @@ def speed_limit_profile(seg, params: DynamicsParams, rider: Rider | None = None)
     v_seg = np.full(seg.n, params.v_cap)
     np.minimum.at(v_seg, seg_idx, v_lim[1:])
     return v_node, v_seg
+
+
+@njit(cache=True)
+def _integrate(ds_all, seg_idx, v_lim, grade, rho, wind, p_req, mass, crr, cda,
+               m_eff, eff, v0, n_seg, keep_trace):
+    """Noyau d'integration sur la grille fine (voir simulate_dynamic).
+
+    Renvoie (temps par segment, travail applique par segment, freinage par
+    segment, trace de vitesse aux noeuds fins)."""
+    n_steps = len(ds_all)
+    seg_time = np.zeros(n_seg)
+    work = np.zeros(n_seg)
+    braking = np.zeros(n_seg, dtype=np.bool_)
+    trace = np.zeros(n_steps + 1) if keep_trace else np.zeros(1)
+    v = v0
+    if keep_trace:
+        trace[0] = v
+    for j in range(n_steps):
+        i = seg_idx[j]
+        ds = ds_all[j]
+        g = grade[i]
+        theta = np.arctan(g)
+        f_rg = mass * G * (np.sin(theta) + crr * np.cos(theta))
+        rel = v + wind[i]
+        f_res = f_rg + 0.5 * rho[i] * cda * rel * abs(rel)
+        v_lim_end = v_lim[j + 1]
+        v_safe = v if v > 0.5 else 0.5
+        v2_coast = v * v - 2.0 * f_res * ds / m_eff
+        drive = p_req[i] * eff / v_safe
+        v2_pow = v * v + 2.0 * (drive - f_res) * ds / m_eff
+        v_pow = np.sqrt(v2_pow if v2_pow > 0.25 else 0.25)
+        if v_pow <= v_lim_end:
+            v_new = v_pow
+            p_app = p_req[i]
+        elif v2_coast >= v_lim_end * v_lim_end:
+            v_new = v_lim_end
+            p_app = 0.0
+            braking[i] = True
+        else:
+            v_new = v_lim_end
+            p_app = (m_eff * (v_new * v_new - v * v) / (2.0 * ds) + f_res) * v_safe / eff
+            if p_app < 0.0:
+                p_app = 0.0
+            if p_app > p_req[i]:
+                p_app = p_req[i]
+            braking[i] = True
+        dt = 2.0 * ds / (v + v_new)
+        seg_time[i] += dt
+        work[i] += p_app * dt
+        v = v_new
+        if keep_trace:
+            trace[j + 1] = v
+    return seg_time, work, braking, trace
+
+
+@njit(cache=True)
+def _backward_limit(cap, a_eff, ds):
+    v = cap.copy()
+    for j in range(len(ds) - 1, -1, -1):
+        v_allowed = np.sqrt(v[j + 1] * v[j + 1] + 2.0 * a_eff[j] * ds[j])
+        if v_allowed < v[j]:
+            v[j] = v_allowed
+    return v
 
 
 # ---------------------------------------------------------------------------
@@ -244,51 +316,27 @@ def simulate_dynamic(powers, seg, rider: Rider, env: Environment,
         v = min(float(params.v_start), v_lim[0])
     v = max(v, 0.5)
 
-    seg_time = np.zeros(n); applied = np.zeros(n); braking = np.zeros(n, bool)
-    trace_v = np.full(len(s_nodes), v) if keep_trace else None
+    if env.is_scalar:
+        rho = np.full(n, float(env.rho)); wind = np.full(n, float(env.wind_ms))
+    else:
+        rho = np.broadcast_to(np.asarray(env.rho, float), (n,)).copy()
+        wind = np.broadcast_to(np.asarray(env.wind_ms, float), (n,)).copy()
+    seg_time, work, braking, trace_v = _integrate(
+        ds_all, seg_idx, v_lim, np.asarray(seg.grade, float), rho, wind, powers,
+        float(rider.mass), float(rider.crr), float(rider.cda), float(m_eff),
+        float(DRIVETRAIN_EFF), float(v), n, bool(keep_trace))
+    applied = work / seg_time
+
+    # bilan de W' (Skiba) sur la puissance appliquee moyenne de chaque segment
     wbal = rider.w_prime; min_wbal = wbal; wbal_track = np.zeros(n)
-
-    j = 0
     for i in range(n):
-        e = env.at(i)
-        rho, wind = float(e.rho), float(e.wind_ms)
-        grade = seg.grade[i]; p_req = powers[i]
-        t_seg = 0.0; work = 0.0
-        while j < len(ds_all) and seg_idx[j] == i:
-            ds = ds_all[j]
-            v_lim_end = v_lim[j + 1]
-            f_res = resistive_force(v, grade, rider, rho, wind)
-            v2_coast = v * v - 2.0 * f_res * ds / m_eff
-            drive = p_req * DRIVETRAIN_EFF / max(v, 0.5)
-            v2_pow = v * v + 2.0 * (drive - f_res) * ds / m_eff
-            v_pow = np.sqrt(max(v2_pow, 0.25))
-            if v_pow <= v_lim_end:
-                v_new, p_app = v_pow, p_req
-            elif v2_coast >= v_lim_end ** 2:
-                # meme en roue libre on depasse : freinage, puissance nulle
-                v_new, p_app = v_lim_end, 0.0
-                braking[i] = True
-            else:
-                # puissance reduite pour arriver exactement au plafond
-                v_new = v_lim_end
-                p_app = (m_eff * (v_new ** 2 - v * v) / (2.0 * ds) + f_res) * max(v, 0.5) / DRIVETRAIN_EFF
-                p_app = float(np.clip(p_app, 0.0, p_req))
-                braking[i] = True
-            dt = 2.0 * ds / (v + v_new)
-            t_seg += dt; work += p_app * dt
-            v = v_new
-            j += 1
-            if keep_trace:
-                trace_v[j] = v
-
-        seg_time[i] = t_seg
-        applied[i] = work / t_seg
-        p_bar = applied[i]
+        p_bar = applied[i]; t_seg = seg_time[i]
         if p_bar > rider.cp:
             wbal -= (p_bar - rider.cp) * t_seg
         else:
             wbal = rider.w_prime - (rider.w_prime - wbal) * np.exp(-((rider.cp - p_bar) / rider.w_prime) * t_seg)
-        min_wbal = min(min_wbal, wbal)
+        if wbal < min_wbal:
+            min_wbal = wbal
         wbal_track[i] = wbal
 
     return DynamicResult(
@@ -311,6 +359,14 @@ class _PlainSegments:
         self.bearing_deg = np.zeros(course.n)
         self.dist_m = np.concatenate([[0.0], np.cumsum(course.length_m)])
         self.total_km = course.total_km
+        self.mid_dist_m = 0.5 * (self.dist_m[:-1] + self.dist_m[1:])
+        self.ele = np.concatenate([[0.0], np.cumsum(course.length_m * course.grade)])
+        self.mid_ele = 0.5 * (self.ele[:-1] + self.ele[1:])
+        self.corners = []
+
+    def slice_km(self, km_start, km_end):
+        mid = self.mid_dist_m / 1000.0
+        return np.where((mid >= km_start) & (mid < km_end))[0]
 
 
 def _course_as_segmented(course: Course) -> _PlainSegments:
