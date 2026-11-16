@@ -1,83 +1,78 @@
-"""Pacing Optimizer v2 : tableau de bord Streamlit.
+"""Pacing Intelligence : tableau de bord d'analyse pour staff performance.
 
 Lancer :  streamlit run app.py
 
-Fonctions :
-  - parcours : GPX importe, ou mode demo (Tour de France 2026, etape 16),
-    ou tableau de segments saisis a la main (comme la v1) ;
-  - meteo : Open-Meteo a la date et l'heure choisies (densite de l'air et
-    vent par segment), ou valeurs manuelles ;
-  - athlete : saisie manuelle, ou CP/W' ajustes depuis un fichier de
-    puissance (CSV secs,power ou export GoldenCheetah) ;
-  - resultats : strategies constante / optimale (et reelle en mode demo),
-    bilan W', temps par section, carte avec puissance cible et fleches de
-    vent, export CSV et .zwo.
+Contenu :
+  - modele predictif hybride (physique de Martin + gradient boosting
+    entraine sur les segments GoldenCheetah OpenData) : temps atteignable
+    sur un parcours pour un profil de coureur, avec incertitude validee ;
+  - plan de puissance optimal par section (simulateur dynamique, W'bal) ;
+  - conditions reelles (Open-Meteo), carte, exports ;
+  - validation : erreurs mesurees sur sorties et athletes jamais vus, et sur
+    les pointages du Tour de France 2026 (etape 16).
 """
 
 from __future__ import annotations
 
-import io
+import json
 import sys
-from datetime import date, time as dtime, datetime
+from datetime import date, datetime, time as dtime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-from pacing_model import Rider, Environment, Course  # noqa: E402
-from course_io import load_gpx, smooth_elevation, segment_track, SegmentedCourse  # noqa: E402
-from weather import (fetch_hourly, sample_at, segment_environment, WeatherSample)  # noqa: E402
+from pacing_model import Rider, Environment  # noqa: E402
+from course_io import load_gpx, smooth_elevation, segment_track  # noqa: E402
+from weather import fetch_hourly, sample_at, segment_environment  # noqa: E402
 from dynamics import DynamicsParams, simulate_dynamic  # noqa: E402
 from optimizer import optimize_dynamic, plan_table  # noqa: E402
-from physiology import mmp_curve, fit_cp_wprime  # noqa: E402
+from ml_model import HybridModel, predict_course_fast, MODEL_DIR  # noqa: E402
 
-st.set_page_config(page_title="Pacing Optimizer v2", layout="wide")
-
-C_CONST, C_OPT, C_REAL, C_PROFILE = "#6B7280", "#0F766E", "#B45309", "#CBD5E1"
-DEMO_GPX = ROOT / "data/raw/gpx/tdf2026_stage16.gpx"
-DEMO_SPLITS = ROOT / "data/processed/tdf2026_stage16_splits.csv"
-DEMO = {"date": date(2026, 7, 21), "time": dtime(17, 13), "mass": 63.0, "cda": 0.21, "cp": 430.0,
-        "w_prime": 25.0, "breakpoints": "9.64, 10.9, 17.0", "a_lat": 8.0,
-        "checkpoints": [(4.8, 488), (9.7, 942), (18.1, 1410), (26.1, 1939)]}
-
-st.title("Pacing Optimizer v2")
-st.caption("Parcours GPX, meteo Open-Meteo, physique dynamique (inertie, virages, freinage), "
-           "contrainte W'bal. Les parametres athlete sont des hypotheses tant qu'ils ne viennent pas "
-           "d'un capteur de puissance.")
-
+st.set_page_config(page_title="Pacing Intelligence", page_icon="⏱", layout="wide",
+                   initial_sidebar_state="expanded")
 
 # ---------------------------------------------------------------------------
-# Chargement (cache)
+# Style
 # ---------------------------------------------------------------------------
+TEAL, AMBER, SLATE, RED, BLUE = "#2DD4BF", "#F59E0B", "#94A3B8", "#F87171", "#60A5FA"
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap');
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+.block-container { padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1500px; }
+h1, h2, h3 { letter-spacing: -0.01em; }
+.hero { display:flex; justify-content:space-between; align-items:flex-end; border-bottom:1px solid #1F2A44; padding-bottom:12px; margin-bottom:18px; }
+.hero .t { font-size:30px; font-weight:700; color:#F8FAFC; }
+.hero .s { color:#94A3B8; font-size:14px; margin-top:2px; }
+.hero .tag { background:#0F2A2B; color:#2DD4BF; border:1px solid #1E4A47; border-radius:999px; padding:4px 12px; font-size:12px; font-weight:600; }
+.kpis { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap:12px; margin: 6px 0 18px 0; }
+.kpi { background:linear-gradient(180deg,#121C33 0%,#0F172A 100%); border:1px solid #1F2A44; border-radius:12px; padding:14px 16px; }
+.kpi .l { color:#94A3B8; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+.kpi .v { font-family:'JetBrains Mono', monospace; font-size:26px; font-weight:500; color:#F8FAFC; margin-top:4px; }
+.kpi .d { font-size:12px; color:#2DD4BF; margin-top:2px; }
+.kpi .d.warn { color:#F59E0B; }
+.kpi .d.muted { color:#94A3B8; }
+.sec { color:#F8FAFC; font-weight:600; font-size:17px; margin: 14px 0 6px 0; }
+.note { background:#111A2E; border-left:3px solid #F59E0B; padding:10px 14px; border-radius:6px; color:#CBD5E1; font-size:13px; }
+.src { color:#64748B; font-size:12px; }
+[data-testid="stSidebar"] { background:#0B1220; border-right:1px solid #1F2A44; }
+div[data-testid="stDataFrame"] { border:1px solid #1F2A44; border-radius:8px; }
+</style>
+""", unsafe_allow_html=True)
 
-@st.cache_data(show_spinner=False)
-def load_segmented(gpx_bytes: bytes, step_m: float) -> SegmentedCourse:
-    tmp = ROOT / "data/raw/gpx/_upload.gpx"
-    tmp.write_bytes(gpx_bytes)
-    track = load_gpx(tmp)
-    return segment_track(track, step_m=step_m, ele=smooth_elevation(track))
+PLOT_LAYOUT = dict(template="plotly_dark", paper_bgcolor="#0B1220", plot_bgcolor="#0F172A",
+                   font=dict(family="Inter", color="#CBD5E1", size=12), margin=dict(l=50, r=20, t=40, b=40),
+                   legend=dict(orientation="h", y=1.08, x=0), hovermode="x unified")
 
 
-@st.cache_data(show_spinner=False)
-def weather_env(lat_mid, lon_mid, ele_mid, bearing, dist_mid, n, day: str, when: str, lats, lons, dists):
-    samples = []
-    for la, lo, d in zip(lats, lons, dists):
-        payload = fetch_hourly(float(la), float(lo), day, cache_dir=ROOT / "data/raw/weather")
-        samples.append((float(d), sample_at(payload, datetime.fromisoformat(f"{day}T{when}"))))
-
-    class _S:   # vue minimale pour segment_environment
-        pass
-    s = _S(); s.n = n; s.mid_dist_m = np.asarray(dist_mid); s.mid_ele = np.asarray(ele_mid)
-    s.bearing_deg = np.asarray(bearing)
-    env, df = segment_environment(s, samples)
-    return env.rho, env.wind_ms, df, samples[0][1]
+def kpi(label, value, delta="", cls=""):
+    return f'<div class="kpi"><div class="l">{label}</div><div class="v">{value}</div><div class="d {cls}">{delta}</div></div>'
 
 
 def fmt(t):
@@ -85,146 +80,160 @@ def fmt(t):
 
 
 # ---------------------------------------------------------------------------
-# Barre laterale
+# Chargement (cache)
 # ---------------------------------------------------------------------------
+DEMO_GPX = ROOT / "data/raw/gpx/tdf2026_stage16.gpx"
+DEMO = {"date": date(2026, 7, 21), "time": dtime(17, 13), "mass": 63.0, "cda": 0.21, "cp": 430.0, "w_prime": 25.0,
+        "breakpoints": "9.64, 10.9, 17.0", "a_lat": 8.0, "checkpoints": [(4.8, 488), (9.7, 942), (18.1, 1410), (26.1, 1939)]}
 
+
+@st.cache_resource(show_spinner=False)
+def load_model():
+    p = MODEL_DIR / "hybrid.joblib"
+    if not p.exists():
+        return None, {}
+    m = HybridModel.load(p)
+    metrics = json.load(open(MODEL_DIR / "metrics.json")) if (MODEL_DIR / "metrics.json").exists() else {}
+    return m, metrics
+
+
+@st.cache_data(show_spinner=False)
+def load_segmented(gpx_bytes: bytes, step_m: float):
+    tmp = ROOT / "data/raw/gpx/_upload.gpx"; tmp.write_bytes(gpx_bytes)
+    track = load_gpx(tmp)
+    return segment_track(track, step_m=step_m, ele=smooth_elevation(track))
+
+
+@st.cache_data(show_spinner=False)
+def weather_arrays(day: str, when: str, lats, lons, dists, mid_ele, bearing, mid_dist, n):
+    samples = []
+    for la, lo, d in zip(lats, lons, dists):
+        payload = fetch_hourly(float(la), float(lo), day, cache_dir=ROOT / "data/raw/weather")
+        samples.append((float(d), sample_at(payload, datetime.fromisoformat(f"{day}T{when}"))))
+
+    class S:
+        pass
+    s = S(); s.n = n; s.mid_dist_m = np.asarray(mid_dist); s.mid_ele = np.asarray(mid_ele); s.bearing_deg = np.asarray(bearing)
+    env, df = segment_environment(s, samples)
+    return np.asarray(env.rho), np.asarray(env.wind_ms), df, samples[0][1]
+
+
+@st.cache_data(show_spinner=False)
+def load_validation_tables():
+    out = {}
+    for name in ("stage16_loo", "stage16_strategies", "stage16_sectors"):
+        p = ROOT / f"reports/tables/{name}.csv"
+        if p.exists():
+            out[name] = pd.read_csv(p)
+    p = ROOT / "data/processed/opendata_segments/athletes.csv"
+    if p.exists():
+        out["athletes"] = pd.read_csv(p)
+    return out
+
+
+model, metrics = load_model()
+tables = load_validation_tables()
+
+# ---------------------------------------------------------------------------
+# Barre laterale : entrees
+# ---------------------------------------------------------------------------
 with st.sidebar:
-    st.header("Parcours")
-    mode = st.radio("Source", ["Demo : Tour 2026, etape 16", "Fichier GPX", "Segments manuels"],
-                    index=0 if DEMO_GPX.exists() else 2)
-    step_m = st.select_slider("Resolution (m)", [50, 100], value=50)
+    st.markdown("### Parcours")
+    mode = st.radio("Source", ["Tour de France 2026, étape 16", "Fichier GPX"], label_visibility="collapsed")
     seg = None
-    if mode.startswith("Demo"):
+    if mode.startswith("Tour"):
         if DEMO_GPX.exists():
-            seg = load_segmented(DEMO_GPX.read_bytes(), float(step_m))
-        else:
-            st.error("GPX de demo absent (data/raw/gpx/tdf2026_stage16.gpx).")
-    elif mode == "Fichier GPX":
+            seg = load_segmented(DEMO_GPX.read_bytes(), 50.0)
+    else:
         up = st.file_uploader("GPX", type=["gpx"])
         if up is not None:
-            seg = load_segmented(up.getvalue(), float(step_m))
-    demo = mode.startswith("Demo")
+            seg = load_segmented(up.getvalue(), 50.0)
+    demo = mode.startswith("Tour")
+    d = DEMO if demo else {"mass": 70.0, "cda": 0.23, "cp": 380.0, "w_prime": 22.0, "a_lat": 6.0, "breakpoints": ""}
 
-    st.header("Athlete")
-    d = DEMO if demo else {"mass": 68.0, "cda": 0.28, "cp": 300.0, "w_prime": 20.0, "a_lat": 6.0}
-    mass_rider = st.number_input("Masse athlete (kg)", 40.0, 110.0, d["mass"], 0.5)
-    mass_bike = st.number_input("Masse velo + equipement (kg)", 6.0, 14.0, 8.5, 0.1)
-    cda = st.number_input("CdA (m2)", 0.15, 0.45, d["cda"], 0.005, format="%.3f")
-    crr = st.number_input("Crr", 0.002, 0.010, 0.0032, 0.0002, format="%.4f")
-    power_file = st.file_uploader("Fichier de puissance (CSV secs,power) pour ajuster CP et W'", type=["csv"])
-    cp_default, wp_default = d["cp"], d["w_prime"]
-    if power_file is not None:
-        try:
-            pf = pd.read_csv(power_file)
-            cols = {c.lower(): c for c in pf.columns}
-            secs = pf[cols.get("secs", list(pf.columns)[0])].to_numpy(float)
-            pw = pf[cols.get("power", list(pf.columns)[1])].to_numpy(float)
-            grid = np.arange(0, secs[-1] + 1); p1 = np.interp(grid, secs, pw)
-            cp_fit, wp_fit, r2 = fit_cp_wprime(mmp_curve(p1))
-            if not np.isnan(cp_fit):
-                cp_default, wp_default = float(cp_fit), float(wp_fit) / 1000.0
-                st.success(f"CP {cp_fit:.0f} W, W' {wp_fit / 1000:.1f} kJ (R2 {r2:.3f}) ajustes sur 3-20 min")
-        except Exception as exc:   # fichier illisible
-            st.warning(f"Fichier de puissance non lu : {exc}")
-    cp = st.number_input("Critical Power (W)", 100.0, 600.0, cp_default, 5.0)
-    w_prime = st.number_input("W' (kJ)", 5.0, 45.0, wp_default, 0.5) * 1000.0
-    p_max = st.number_input("Puissance plafond (W)", 300.0, 1200.0, 750.0 if demo else 600.0, 10.0)
+    st.markdown("### Coureur")
+    c1, c2 = st.columns(2)
+    mass_rider = c1.number_input("Masse (kg)", 40.0, 110.0, d["mass"], 0.5)
+    mass_bike = c2.number_input("Vélo (kg)", 6.0, 14.0, 8.5, 0.1)
+    cda = c1.number_input("CdA (m²)", 0.15, 0.60, d["cda"], 0.005, format="%.3f")
+    crr = c2.number_input("Crr", 0.002, 0.012, 0.0032, 0.0002, format="%.4f")
+    cp = c1.number_input("CP (W)", 100.0, 600.0, d["cp"], 5.0)
+    w_prime = c2.number_input("W' (kJ)", 5.0, 45.0, d["w_prime"], 0.5) * 1000.0
+    p_max = st.number_input("Puissance plafond (W)", 300.0, 1200.0, 750.0 if demo else 650.0, 10.0)
 
-    st.header("Meteo")
-    wmode = st.radio("Source meteo", ["Open-Meteo (date et heure)", "Manuelle"], index=0)
+    st.markdown("### Conditions")
+    wmode = st.radio("Météo", ["Open-Meteo à la date", "Manuelle"], label_visibility="collapsed")
     if wmode.startswith("Open"):
         day = st.date_input("Date", d.get("date", date.today()))
-        when = st.time_input("Heure de depart (locale)", d.get("time", dtime(10, 0)))
+        when = st.time_input("Heure de départ", d.get("time", dtime(10, 0)))
     else:
-        rho_manual = st.slider("Densite de l'air (kg/m3)", 0.95, 1.30, 1.15, 0.005)
-        wind_manual = st.slider("Vent a 10 m (m/s)", 0.0, 15.0, 0.0, 0.5)
-        wind_dir_manual = st.slider("Direction du vent (deg, d'ou il vient)", 0, 359, 0, 5)
+        rho_manual = st.slider("Densité de l'air (kg/m³)", 0.95, 1.30, 1.15, 0.005)
+        wind_manual = st.slider("Vent à 10 m (m/s)", 0.0, 15.0, 0.0, 0.5)
+        wind_dir_manual = st.slider("Direction du vent (°, provenance)", 0, 359, 0, 5)
 
-    st.header("Physique et optimiseur")
-    a_lat = st.slider("Acceleration laterale limite (m/s2)", 3.0, 10.0, d.get("a_lat", 6.0), 0.5,
-                      help="6 = prudent ; 8 = valeur calee sur l'etape 16 (0,82 g)")
-    width = st.slider("Largeur de route utilisable (m)", 0.0, 10.0, 6.0, 0.5)
-    block_m = st.select_slider("Taille des blocs de puissance (m)", [250, 500, 1000], value=500)
-    bp_text = st.text_input("Coupures de section (km, separees par des virgules ; vide = auto)",
-                            d.get("breakpoints", ""))
-    smooth = st.select_slider("Lissage du plan", ["faible", "moyen", "fort"], value="moyen")
+    with st.expander("Physique et optimiseur"):
+        a_lat = st.slider("Limite latérale en virage (m/s²)", 3.0, 10.0, d.get("a_lat", 6.0), 0.5)
+        width = st.slider("Largeur de route utilisable (m)", 0.0, 10.0, 6.0, 0.5)
+        block_m = st.select_slider("Blocs de puissance (m)", [250, 500, 1000], value=500)
+        bp_text = st.text_input("Coupures de section (km)", d.get("breakpoints", ""))
+        smooth = st.select_slider("Lissage du plan", ["faible", "moyen", "fort"], value="moyen")
 
 # ---------------------------------------------------------------------------
-# Parcours manuel (v1)
+# En-tete
 # ---------------------------------------------------------------------------
-
-if mode == "Segments manuels":
-    st.subheader("Segments")
-    if "course_df" not in st.session_state:
-        demo_c = Course.rolling_demo()
-        st.session_state.course_df = pd.DataFrame({"longueur_m": demo_c.length_m.astype(int),
-                                                   "pente_%": (demo_c.grade * 100).round(1)})
-    edited = st.data_editor(st.session_state.course_df, num_rows="dynamic", use_container_width=True)
-    L = edited["longueur_m"].to_numpy(float); g = edited["pente_%"].to_numpy(float) / 100.0
-    nodes = np.concatenate([[0.0], np.cumsum(L)])
-    ele = np.concatenate([[0.0], np.cumsum(L * g)])
-    seg = SegmentedCourse(nodes, np.full(len(nodes), 46.0), np.full(len(nodes), 6.0), ele, L, g,
-                          np.zeros(len(L)), np.full(len(L), np.inf), np.zeros(len(L)), corners=[])
+n_seg = metrics.get("n_segments", 0); n_ath = metrics.get("n_athletes", 0)
+ho = metrics.get("held_out_athletes", {})
+st.markdown(f"""
+<div class="hero"><div><div class="t">Pacing Intelligence</div>
+<div class="s">Prédiction du temps atteignable et plan de puissance optimal, à partir d'un modèle entraîné sur des sorties réelles.</div></div>
+<div><span class="tag">modèle : {n_seg:,} segments, {n_ath} athlètes</span></div></div>
+""".replace(",", " "), unsafe_allow_html=True)
 
 if seg is None:
-    st.info("Chargez un GPX ou choisissez le mode demo.")
+    st.info("Chargez un GPX ou choisissez l'étape 16.")
     st.stop()
 
-rider = Rider(mass_rider=mass_rider, mass_bike=mass_bike, crr=crr, cda=cda, cp=cp,
-              w_prime=w_prime, p_max=p_max, p_min=0.0)
+rider = Rider(mass_rider=mass_rider, mass_bike=mass_bike, crr=crr, cda=cda, cp=cp, w_prime=w_prime, p_max=p_max, p_min=0.0)
 params = DynamicsParams(a_lat_max=a_lat, road_width_m=width)
+profile = {"mass_kg": mass_rider, "cda": cda, "crr": crr}
 
-# ---------------------------------------------------------------------------
 # Meteo
-# ---------------------------------------------------------------------------
-
-wdf = None
-if wmode.startswith("Open") and mode != "Segments manuels":
+wdf, s0 = None, None
+if wmode.startswith("Open"):
     try:
         idx = np.linspace(0, len(seg.dist_m) - 1, 3).round().astype(int)
-        rho_arr, wind_arr, wdf, s0 = weather_env(
-            None, None, tuple(seg.mid_ele), tuple(seg.bearing_deg), tuple(seg.mid_dist_m), seg.n,
-            day.isoformat(), when.strftime("%H:%M:%S"),
-            tuple(seg.lat[idx]), tuple(seg.lon[idx]), tuple(seg.dist_m[idx]))
-        env = Environment(rho=np.asarray(rho_arr), wind_ms=np.asarray(wind_arr))
-        st.caption(f"Meteo Open-Meteo au depart : {s0.temp_c:.1f} C, HR {s0.rh_pct:.0f} %, "
-                   f"{s0.p_surface_hpa:.0f} hPa, vent {s0.wind10_ms:.1f} m/s de {s0.wind_dir_deg:.0f} deg "
-                   f"(a 10 m) ; densite moyenne {np.mean(rho_arr):.3f} kg/m3, vent de face moyen "
-                   f"{np.average(wind_arr, weights=seg.length_m):+.2f} m/s a 1 m.")
+        rho_arr, wind_arr, wdf, s0 = weather_arrays(day.isoformat(), when.strftime("%H:%M:%S"),
+                                                     tuple(seg.lat[idx]), tuple(seg.lon[idx]), tuple(seg.dist_m[idx]),
+                                                     tuple(seg.mid_ele), tuple(seg.bearing_deg), tuple(seg.mid_dist_m), seg.n)
+        env = Environment(rho=rho_arr, wind_ms=wind_arr)
     except Exception as exc:
-        st.warning(f"Meteo indisponible ({exc}) : valeurs manuelles par defaut.")
+        st.warning(f"Météo indisponible ({exc}) : densité 1,15 kg/m³, vent nul.")
         env = Environment(rho=1.15, wind_ms=0.0)
 else:
     from weather import wind_at_height, wind_components
-    if wmode.startswith("Open"):
-        env = Environment(rho=1.15, wind_ms=0.0)
-    else:
-        w1 = wind_at_height(wind_manual)
-        head, _ = wind_components(w1, wind_dir_manual, seg.bearing_deg)
-        env = Environment(rho=rho_manual, wind_ms=np.asarray(head))
-
-# ---------------------------------------------------------------------------
-# Calculs
-# ---------------------------------------------------------------------------
+    head, _ = wind_components(wind_at_height(wind_manual), wind_dir_manual, seg.bearing_deg)
+    env = Environment(rho=rho_manual, wind_ms=np.asarray(head))
 
 breakpoints = None
 if bp_text.strip():
     try:
         breakpoints = [float(x) for x in bp_text.replace(";", ",").split(",") if x.strip()]
     except ValueError:
-        st.warning("Coupures illisibles, decoupage automatique utilise.")
-lam = {"faible": 5e-5, "moyen": 2e-4, "fort": 1e-3}[smooth]
+        breakpoints = None
+lam = {"faible": 1e-5, "moyen": 5e-5, "fort": 2e-4}[smooth]
 
-with st.spinner("Optimisation..."):
-    try:
-        opt = optimize_dynamic(seg, rider, env, params, block_m=float(block_m),
-                               breakpoints_km=breakpoints, smooth_lambda=lam)
-    except Exception as exc:
-        st.error(f"Calcul impossible avec ces parametres : {exc}")
-        st.stop()
+with st.spinner("Optimisation du plan de puissance…"):
+    opt = optimize_dynamic(seg, rider, env, params, block_m=float(block_m), breakpoints_km=breakpoints, smooth_lambda=lam)
+
+# Prediction hybride du plan optimal et du plan constant
+hyb = None
+if model is not None:
+    t_h, v_h = predict_course_fast(model, seg, opt.result.powers, profile, cp_w=cp)
+    t_hc, _ = predict_course_fast(model, seg, opt.constant.powers, profile, cp_w=cp)
+    hyb = {"time_s": float(t_h.sum()), "seg_time_s": t_h, "speed_ms": v_h, "const_time_s": float(t_hc.sum())}
 
 real = None
-if demo and DEMO_SPLITS.exists():
+if demo:
     from calibration import invert_sector_powers
     try:
         _, p_real = invert_sector_powers(seg, rider, env, DEMO["checkpoints"], params)
@@ -233,132 +242,196 @@ if demo and DEMO_SPLITS.exists():
         real = None
 
 # ---------------------------------------------------------------------------
-# Indicateurs
+# KPIs
 # ---------------------------------------------------------------------------
-
-cols = st.columns(4 if real is not None else 3)
-cols[0].metric("Puissance constante", fmt(opt.constant.time_s), f"{opt.p_constant:.0f} W")
-cols[1].metric("Pacing optimise", fmt(opt.result.time_s), f"{opt.result.avg_speed_kmh:.1f} km/h")
-cols[2].metric("Gain", f"{opt.gain_s:.1f} s", f"{opt.gain_s / opt.constant.time_s * 100:.2f} %")
+err_pct = ho.get("mae_pct_hybrid")
+cards = [
+    kpi("Temps prédit, plan optimal", fmt(opt.result.time_s), f"physique dynamique · {opt.result.avg_speed_kmh:.1f} km/h"),
+]
+if hyb:
+    cards.append(kpi("Temps prédit, modèle appris", fmt(hyb["time_s"]),
+                     f"± {err_pct:.1f} % (athlètes inconnus, 10 km)" if err_pct else "modèle hybride", "muted"))
+cards.append(kpi("Gain vs puissance constante", f"{opt.gain_s:+.1f} s", f"constante {opt.p_constant:.0f} W → {fmt(opt.constant.time_s)}"))
 if real is not None:
-    cols[3].metric("Strategie reelle (reconstruite)", fmt(real.time_s),
-                   f"{real.time_s - opt.result.time_s:+.1f} s vs optimal")
-st.caption(f"{len(opt.block_powers)} blocs, {opt.n_iter} iterations, {opt.elapsed_s:.1f} s de calcul ; "
-           f"min W'bal {opt.result.min_wbal_j / 1000:.2f} kJ.")
+    cards.append(kpi("Stratégie réelle reconstruite", fmt(real.time_s), f"{real.time_s - opt.result.time_s:+.1f} s vs plan optimal", "warn"))
+cards.append(kpi("Puissance moyenne du plan", f"{opt.result.avg_power:.0f} W", f"{opt.result.avg_power / mass_rider:.2f} W/kg · CP {cp:.0f} W", "muted"))
+if s0 is not None:
+    cards.append(kpi("Conditions", f"{s0.temp_c:.0f} °C · {s0.wind10_ms:.1f} m/s", f"ρ {np.mean(env.rho):.3f} kg/m³ · vent de face moyen {np.average(env.wind_ms, weights=seg.length_m):+.1f} m/s", "muted"))
+st.markdown(f'<div class="kpis">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Graphiques
+# Onglets
 # ---------------------------------------------------------------------------
+tab_plan, tab_pred, tab_map, tab_val, tab_data = st.tabs(["Plan de puissance", "Prédiction", "Carte", "Validation", "Données et hypothèses"])
+km_nodes = seg.dist_m / 1000.0; km_mid = seg.mid_dist_m / 1000.0
+tab = plan_table(opt, seg)
 
-km_nodes = seg.dist_m / 1000.0
-km_mid = seg.mid_dist_m / 1000.0
-fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(11, 8.5), sharex=True,
-                                    gridspec_kw={"height_ratios": [1, 2, 1.3]})
-ax1.fill_between(km_nodes, seg.ele, seg.ele.min() - 20, color=C_PROFILE)
-ax1.set_ylabel("Altitude (m)"); ax1.set_title("Profil")
-ax2.plot(km_mid, opt.constant.applied_power, color=C_CONST, lw=1.5, label=f"Constante ({opt.p_constant:.0f} W)")
-ax2.plot(km_mid, opt.result.powers, color=C_OPT, lw=2.2, label="Optimale (cible)")
-ax2.plot(km_mid, opt.result.applied_power, color=C_OPT, lw=1, ls=":", label="Optimale (appliquee, freinages)")
-if real is not None:
-    ax2.plot(km_mid, real.powers, color=C_REAL, lw=1.5, label="Reelle (estimee des pointages)")
-ax2.axhline(rider.cp, color="#B91C1C", ls="--", lw=1, label=f"CP {rider.cp:.0f} W")
-ax2.set_ylabel("Puissance (W)"); ax2.legend(loc="lower left", fontsize=8, ncol=3); ax2.set_title("Strategies")
-ax3.plot(km_mid, opt.constant.wbal_j / 1000, color=C_CONST, lw=1.5)
-ax3.plot(km_mid, opt.result.wbal_j / 1000, color=C_OPT, lw=2.2)
-if real is not None:
-    ax3.plot(km_mid, real.wbal_j / 1000, color=C_REAL, lw=1.5)
-ax3.axhline(0, color="#B91C1C", ls="--", lw=1); ax3.set_ylabel("W'bal (kJ)"); ax3.set_xlabel("Distance (km)")
-fig.tight_layout()
-st.pyplot(fig)
+with tab_plan:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=km_nodes, y=seg.ele, fill="tozeroy", name="Altitude (m)", line=dict(color="#1E293B", width=1),
+                             fillcolor="rgba(148,163,184,0.18)", yaxis="y2", hovertemplate="%{y:.0f} m"))
+    fig.add_trace(go.Scatter(x=km_mid, y=opt.constant.powers, name=f"Constante {opt.p_constant:.0f} W", line=dict(color=SLATE, width=1.5, dash="dot")))
+    if real is not None:
+        fig.add_trace(go.Scatter(x=km_mid, y=real.powers, name="Réelle (estimée des pointages)", line=dict(color=AMBER, width=1.8)))
+    fig.add_trace(go.Scatter(x=km_mid, y=opt.result.powers, name="Plan optimal (cible)", line=dict(color=TEAL, width=2.6, shape="hv")))
+    fig.add_trace(go.Scatter(x=km_mid, y=opt.result.applied_power, name="Appliquée (freinages)", line=dict(color=TEAL, width=1, dash="dot"), opacity=0.7))
+    fig.add_hline(y=cp, line=dict(color=RED, dash="dash", width=1), annotation_text=f"CP {cp:.0f} W", annotation_position="top left")
+    fig.update_layout(**PLOT_LAYOUT, height=420, title="Puissance cible par bloc",
+                      yaxis=dict(title="W", gridcolor="#1F2A44"), xaxis=dict(title="km", gridcolor="#1F2A44"),
+                      yaxis2=dict(overlaying="y", side="right", showgrid=False, title="m", range=[seg.ele.min() - 20, seg.ele.max() * 1.6]))
+    st.plotly_chart(fig, use_container_width=True)
 
-# ---------------------------------------------------------------------------
-# Carte
-# ---------------------------------------------------------------------------
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=km_mid, y=opt.constant.wbal_j / 1000, name="Constante", line=dict(color=SLATE, width=1.5, dash="dot")))
+        if real is not None:
+            fig2.add_trace(go.Scatter(x=km_mid, y=real.wbal_j / 1000, name="Réelle", line=dict(color=AMBER, width=1.8)))
+        fig2.add_trace(go.Scatter(x=km_mid, y=opt.result.wbal_j / 1000, name="Plan optimal", line=dict(color=TEAL, width=2.4), fill="tozeroy", fillcolor="rgba(45,212,191,0.10)"))
+        fig2.add_hline(y=0, line=dict(color=RED, dash="dash", width=1))
+        fig2.update_layout(**PLOT_LAYOUT, height=300, title="Réserve anaérobie W'bal (kJ)", yaxis=dict(gridcolor="#1F2A44"), xaxis=dict(title="km", gridcolor="#1F2A44"))
+        st.plotly_chart(fig2, use_container_width=True)
+    with c2:
+        st.markdown('<div class="sec">Temps par section</div>', unsafe_allow_html=True)
+        edges = [0.0] + sorted(breakpoints or []) + [seg.total_km]
+        rows = []
+        for a, b in zip(edges[:-1], edges[1:]):
+            idx = seg.slice_km(a, b)
+            if len(idx) == 0:
+                continue
+            row = {"Section": f"km {a:.1f} – {b:.1f}", "Pente": f"{np.average(seg.grade[idx], weights=seg.length_m[idx]) * 100:+.1f} %",
+                   "P cible": f"{np.average(opt.result.powers[idx], weights=seg.length_m[idx]):.0f} W",
+                   "Optimal": fmt(opt.result.seg_time_s[idx].sum()), "Constante": fmt(opt.constant.seg_time_s[idx].sum())}
+            if real is not None:
+                row["Réelle"] = fmt(real.seg_time_s[idx].sum())
+            rows.append(row)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.caption(f"{len(opt.block_powers)} blocs de {block_m} m · {opt.elapsed_s:.0f} s de calcul · min W'bal {opt.result.min_wbal_j / 1000:.2f} kJ")
 
-if mode != "Segments manuels":
-    st.subheader("Carte : puissance cible par bloc et vent")
-    tab = plan_table(opt, seg)
+    st.markdown('<div class="sec">Plan bloc par bloc</div>', unsafe_allow_html=True)
+    show = tab.rename(columns={"km_start": "km début", "km_end": "km fin", "grade_pct": "pente %", "power_w": "P cible (W)",
+                               "applied_w": "P appliquée (W)", "speed_kmh": "vitesse (km/h)", "time_s": "temps (s)",
+                               "wbal_end_kj": "W'bal fin (kJ)", "braking": "freinage"}).round(1)
+    st.dataframe(show, hide_index=True, use_container_width=True, height=300)
+    e1, e2 = st.columns(2)
+    e1.download_button("Exporter le plan (CSV)", tab.round(1).to_csv(index=False).encode(), "pacing_plan.csv", "text/csv", use_container_width=True)
+
+    def to_zwo(tab, name="Pacing plan"):
+        parts = [f'<workout_file><author>Pacing Intelligence</author><name>{name}</name><description>Plan de puissance par bloc</description><sportType>bike</sportType><workout>']
+        parts += [f'<SteadyState Duration="{max(int(round(r.time_s)), 1)}" Power="{r.power_w:.0f}" />' for r in tab.itertuples()]
+        parts.append("</workout></workout_file>")
+        return "\n".join(parts).encode()
+    e2.download_button("Exporter en séance (.zwo)", to_zwo(tab), "pacing_plan.zwo", "application/xml", use_container_width=True)
+
+with tab_pred:
+    if hyb is None:
+        st.markdown('<div class="note">Modèle appris absent : lancez <code>python examples/train_hybrid.py</code>. Seule la physique dynamique est affichée.</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scatter(x=km_mid, y=opt.result.speed_ms * 3.6, name="Physique dynamique", line=dict(color=TEAL, width=2)))
+        if hyb:
+            fig3.add_trace(go.Scatter(x=km_mid, y=hyb["speed_ms"] * 3.6, name="Modèle appris", line=dict(color=BLUE, width=2)))
+        if real is not None:
+            fig3.add_trace(go.Scatter(x=km_mid, y=real.speed_ms * 3.6, name="Réelle reconstruite", line=dict(color=AMBER, width=1.5)))
+        fig3.update_layout(**PLOT_LAYOUT, height=380, title="Vitesse prédite sur le plan optimal (km/h)", yaxis=dict(gridcolor="#1F2A44"), xaxis=dict(title="km", gridcolor="#1F2A44"))
+        st.plotly_chart(fig3, use_container_width=True)
+    with c2:
+        st.markdown('<div class="sec">Deux modèles, un même plan</div>', unsafe_allow_html=True)
+        rows = [{"Modèle": "Physique dynamique (Martin + inertie, virages, freinage)", "Plan optimal": fmt(opt.result.time_s), "Constante": fmt(opt.constant.time_s)}]
+        if hyb:
+            rows.append({"Modèle": "Hybride appris (physique + boosting, OpenData)", "Plan optimal": fmt(hyb["time_s"]), "Constante": fmt(hyb["const_time_s"])})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        if hyb:
+            st.markdown(f"""<div class="note">Le modèle appris corrige la physique de ce qu'elle ignore (variabilité de l'effort,
+            inertie entre segments, routes réelles). Sur des athlètes jamais vus, son erreur sur 10 km est de
+            <b>{ho.get('mae_pct_hybrid', float('nan')):.2f} %</b> contre {ho.get('mae_pct_physics', float('nan')):.2f} % pour la physique seule
+            (p90 {ho.get('p90_pct_hybrid', float('nan')):.2f} %). Il ne connaît ni le vent du jour ni les virages : la physique dynamique reste la
+            référence pour le plan, le modèle appris donne l'intervalle réaliste.</div>""", unsafe_allow_html=True)
+        if hyb and real is not None:
+            st.caption(f"Écart entre les deux modèles : {hyb['time_s'] - opt.result.time_s:+.1f} s.")
+
+with tab_map:
     pmin, pmax = tab.power_w.min(), tab.power_w.max()
 
     def color(p):
         t = 0.0 if pmax == pmin else (p - pmin) / (pmax - pmin)
-        return [int(37 + (185 - 37) * t), int(99 + (28 - 99) * t), int(235 + (28 - 235) * t), 200]
-
+        return [int(96 + (248 - 96) * t), int(165 + (113 - 165) * t), int(250 + (113 - 250) * t), 220]
     paths = []
     for row in tab.itertuples():
         m = (km_nodes >= row.km_start - 1e-9) & (km_nodes <= row.km_end + 1e-9)
         pts = [[float(lo), float(la)] for lo, la in zip(seg.lon[m], seg.lat[m])]
         if len(pts) >= 2:
             paths.append({"path": pts, "color": color(row.power_w),
-                          "label": f"km {row.km_start:.1f}-{row.km_end:.1f} : {row.power_w:.0f} W, "
-                                   f"{row.speed_kmh:.0f} km/h, pente {row.grade_pct:+.1f} %"})
-    layers = [pdk.Layer("PathLayer", data=paths, get_path="path", get_color="color", width_min_pixels=4,
-                        pickable=True)]
+                          "label": f"km {row.km_start:.1f}-{row.km_end:.1f} · {row.power_w:.0f} W · {row.speed_kmh:.0f} km/h · {row.grade_pct:+.1f} %"})
+    layers = [pdk.Layer("PathLayer", data=paths, get_path="path", get_color="color", width_min_pixels=5, pickable=True)]
     if wdf is not None and len(wdf):
         arrows = []
-        step = max(seg.n // 25, 1)
-        for i in range(0, seg.n, step):
+        for i in range(0, seg.n, max(seg.n // 25, 1)):
             wd = float(wdf.wind_dir_deg.iloc[i]); spd = float(wdf.wind_rider_ms.iloc[i])
-            # le vent souffle VERS wd + 180 ; fleche de 300 m pour 5 m/s
-            ang = np.radians(wd + 180.0); L = 60.0 * max(spd, 0.5)
+            ang = np.radians(wd + 180.0); L = 70.0 * max(spd, 0.5)
             la0, lo0 = float(seg.lat[i]), float(seg.lon[i])
-            la1 = la0 + L * np.cos(ang) / 111320.0
-            lo1 = lo0 + L * np.sin(ang) / (111320.0 * np.cos(np.radians(la0)))
-            arrows.append({"path": [[lo0, la0], [lo1, la1]], "label": f"vent {spd:.1f} m/s de {wd:.0f} deg"})
-        layers.append(pdk.Layer("PathLayer", data=arrows, get_path="path", get_color=[120, 120, 120, 180],
-                                width_min_pixels=2, pickable=True))
-    view = pdk.ViewState(latitude=float(seg.lat.mean()), longitude=float(seg.lon.mean()), zoom=11.5)
+            arrows.append({"path": [[lo0, la0], [lo0 + L * np.sin(ang) / (111320.0 * np.cos(np.radians(la0))), la0 + L * np.cos(ang) / 111320.0]],
+                           "label": f"vent {spd:.1f} m/s de {wd:.0f}°"})
+        layers.append(pdk.Layer("PathLayer", data=arrows, get_path="path", get_color=[148, 163, 184, 200], width_min_pixels=2, pickable=True))
+    view = pdk.ViewState(latitude=float(seg.lat.mean()), longitude=float(seg.lon.mean()), zoom=11.6, pitch=35)
     st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=view, tooltip={"text": "{label}"},
-                             map_style=None))
-    st.caption("Bleu = puissance basse, rouge = puissance haute. Fleches grises : vent a hauteur de coureur.")
-else:
-    tab = plan_table(opt, seg)
+                             map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"), use_container_width=True, height=560)
+    st.caption("Bleu = puissance basse, rose = puissance haute. Flèches : vent à hauteur de coureur.")
 
-# ---------------------------------------------------------------------------
-# Tables et exports
-# ---------------------------------------------------------------------------
+with tab_val:
+    st.markdown('<div class="sec">Modèle appris : erreurs mesurées sur des données jamais vues à l\'entraînement</div>', unsafe_allow_html=True)
+    if metrics:
+        rows = []
+        for key, lab in (("held_out_rides", "Sorties inconnues (athlètes connus)"), ("held_out_athletes", "Athlètes inconnus")):
+            m = metrics.get(key, {})
+            rows.append({"Jeu de test": lab, "Segments": f"{m.get('n_segments', 0):,}".replace(",", " "), "Fenêtres 10 km": m.get("n_windows", 0),
+                         "Erreur temps, physique seule": f"{m.get('mae_pct_physics', float('nan')):.2f} %",
+                         "Erreur temps, modèle appris": f"{m.get('mae_pct_hybrid', float('nan')):.2f} %",
+                         "p90": f"{m.get('p90_pct_hybrid', float('nan')):.2f} %", "Biais": f"{m.get('bias_pct_hybrid', float('nan')):+.2f} %"})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.caption(f"Entraîné le {metrics.get('trained_at', '?')} sur {n_seg:,} segments de 200 m, {n_ath} athlètes GoldenCheetah OpenData (CC0).".replace(",", " "))
+    else:
+        st.info("Pas encore de métriques : entraînez le modèle.")
 
-st.subheader("Plan de puissance par bloc")
-show = tab.rename(columns={"km_start": "km debut", "km_end": "km fin", "grade_pct": "pente %",
-                           "power_w": "P cible (W)", "applied_w": "P appliquee (W)",
-                           "speed_kmh": "vitesse (km/h)", "time_s": "temps (s)",
-                           "wbal_end_kj": "W'bal fin (kJ)", "braking": "freinage"})
-st.dataframe(show.round(1), use_container_width=True, hide_index=True)
+    st.markdown('<div class="sec">Tour de France 2026, étape 16 : prédiction d\'un pointage omis</div>', unsafe_allow_html=True)
+    if "stage16_loo" in tables:
+        loo = tables["stage16_loo"]
+        c1, c2 = st.columns([2, 3])
+        with c1:
+            by = loo.groupby("km").agg(MAE_s=("err_s", lambda e: e.abs().mean()), biais_s=("err_s", "mean"), n=("err_s", "size")).reset_index().round(1)
+            by.columns = ["Pointage (km)", "MAE (s)", "Biais (s)", "n"]
+            st.dataframe(by, hide_index=True, use_container_width=True)
+            st.markdown(f'<div class="kpis">{kpi("Erreur moyenne", f"{loo.err_s.abs().mean():.1f} s", f"{loo.err_pct_sector.abs().mean():.2f} % du temps de secteur · n = {len(loo)}")}</div>', unsafe_allow_html=True)
+        with c2:
+            fig4 = go.Figure()
+            for r_name, g in loo.groupby("rider"):
+                fig4.add_trace(go.Bar(x=g.km.astype(str) + " km", y=g.err_s, name=r_name))
+            fig4.update_layout(**PLOT_LAYOUT, height=320, barmode="group", title="Erreur de prédiction par coureur et pointage (s)", yaxis=dict(gridcolor="#1F2A44"))
+            st.plotly_chart(fig4, use_container_width=True)
+    if "stage16_strategies" in tables:
+        s16 = tables["stage16_strategies"]
+        st.markdown('<div class="sec">Étape 16 : stratégie réelle, constante et optimale (top 10)</div>', unsafe_allow_html=True)
+        d = s16[["rider", "mass_kg", "cp_w", "n_checkpoints", "real_s", "constant_s", "optimal_s", "gain_vs_real_s", "gain_vs_constant_s"]].copy()
+        for c in ("real_s", "constant_s", "optimal_s"):
+            d[c] = d[c].map(fmt)
+        d.columns = ["Coureur", "Masse", "CP calée (W)", "Pointages", "Réelle", "Constante", "Optimale", "Gain vs réelle (s)", "Gain vs constante (s)"]
+        st.dataframe(d.round(1), hide_index=True, use_container_width=True)
+        st.caption("Les watts des pros sont déduits des temps sous hypothèses (CdA, Crr, W'), jamais mesurés.")
 
-if breakpoints:
-    st.subheader("Temps par section")
-    edges = [0.0] + sorted(breakpoints) + [seg.total_km]
-    rows = []
-    for a, b in zip(edges[:-1], edges[1:]):
-        idx = seg.slice_km(a, b)
-        if len(idx) == 0:
-            continue
-        row = {"section": f"km {a:.1f} - {b:.1f}", "constante (s)": opt.constant.seg_time_s[idx].sum(),
-               "optimale (s)": opt.result.seg_time_s[idx].sum()}
-        if real is not None:
-            row["reelle (s)"] = real.seg_time_s[idx].sum()
-        rows.append(row)
-    st.dataframe(pd.DataFrame(rows).round(1), use_container_width=True, hide_index=True)
-
-csv = tab.round(1).to_csv(index=False).encode()
-c1, c2 = st.columns(2)
-c1.download_button("Exporter le plan (CSV)", csv, "pacing_plan.csv", "text/csv")
-
-
-def to_zwo(tab, name="Pacing plan"):
-    """Seance Zwift (.zwo) en blocs de puissance absolue : un bloc par ligne du plan.
-    Les durees sont les temps prevus par bloc (un compteur ne sait pas declencher
-    sur la distance en .zwo)."""
-    parts = [f'<workout_file><author>Pacing Optimizer</author><name>{name}</name>'
-             '<description>Plan de puissance par bloc</description><sportType>bike</sportType><workout>']
-    for row in tab.itertuples():
-        parts.append(f'<SteadyState Duration="{max(int(round(row.time_s)), 1)}" '
-                     f'Power="{row.power_w:.0f}" />')
-    parts.append("</workout></workout_file>")
-    return "\n".join(parts).encode()
-
-
-c2.download_button("Exporter en seance (.zwo, puissance absolue)", to_zwo(tab), "pacing_plan.zwo", "application/xml")
-st.caption("Hypotheses : masse, CdA, Crr, W' et limite de virage sont des entrees, pas des mesures. "
-           "En mode demo, la strategie reelle est reconstruite a partir des pointages publies, ce ne sont "
-           "pas des watts mesures.")
+with tab_data:
+    st.markdown('<div class="sec">Hypothèses de cette analyse</div>', unsafe_allow_html=True)
+    st.dataframe(pd.DataFrame([
+        {"Paramètre": "CdA", "Valeur": f"{cda:.3f} m²", "Statut": "hypothèse (saisie)"},
+        {"Paramètre": "Crr", "Valeur": f"{crr:.4f}", "Statut": "hypothèse (saisie)"},
+        {"Paramètre": "Masse coureur + vélo", "Valeur": f"{mass_rider:.1f} + {mass_bike:.1f} kg", "Statut": "saisie"},
+        {"Paramètre": "CP, W'", "Valeur": f"{cp:.0f} W, {w_prime / 1000:.1f} kJ", "Statut": "saisie ou calée sur les pointages"},
+        {"Paramètre": "Limite de virage, largeur", "Valeur": f"{a_lat:.1f} m/s², {width:.0f} m", "Statut": "calée sur l'étape 16 (8 m/s²)"},
+        {"Paramètre": "Météo", "Valeur": "Open-Meteo horaire, vent ramené à 1 m (z0 = 0,10 m)" if wmode.startswith("Open") else "manuelle", "Statut": "mesurée (réanalyse)"},
+        {"Paramètre": "Parcours", "Valeur": f"{seg.total_km:.2f} km, {seg.elevation_gain_m:.0f} m D+, {len(seg.corners or [])} virages", "Statut": "GPX"},
+    ]), hide_index=True, use_container_width=True)
+    if "athletes" in tables:
+        a = tables["athletes"]
+        st.markdown('<div class="sec">Jeu d\'entraînement</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="kpis">{kpi("Athlètes traités", f"{len(a)}", "GoldenCheetah OpenData, CC0")}{kpi("Sorties retenues", f"{int(a.n_rides_kept.sum()):,}".replace(",", " "), f"sur {int(a.n_rides.sum()):,} avec capteur".replace(",", " "))}{kpi("Segments de 200 m", f"{int(a.n_segments.sum()):,}".replace(",", " "), f"{a.n_segments.sum() * 0.2 / 1000:,.0f} 000 km roulés".replace(",", " "))}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="src">Sources : cyclingstage.com (GPX, pointages), bikeraceinfo.com, bikeradar.com (départs), Wikipedia (masses, origine citée), Open-Meteo, OSF 10.17605/OSF.IO/6HFPZ. Détail dans data/processed/README.md.</div>', unsafe_allow_html=True)

@@ -8,3 +8,7 @@ venv/
 # donnees brutes volumineuses (OpenData CC0, 200 Mo : a retelecharger avec le script)
 data/raw/opendata/*.zip
 data/raw/gpx/_upload.gpx
+# modele entraine et segments derives (regenerables : dataset.py, examples/train_hybrid.py)
+models/*.joblib
+data/processed/opendata_segments/*.parquet
+data/processed/opendata_segments_build.log

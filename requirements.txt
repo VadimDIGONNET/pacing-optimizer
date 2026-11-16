@@ -11,3 +11,7 @@ pyproj==3.8.0
 requests==2.34.2
 numba==0.68.1
 pytest==9.2.0
+scikit-learn==1.9.1
+plotly==7.1.0
+pyarrow==26.0.1
+joblib==1.6.0

@@ -1,0 +1,40 @@
+{
+ "train": {
+  "n_segments": 200000,
+  "mae_log_hybrid": 0.05968811728693512,
+  "mae_log_physics": 0.1411283930019316,
+  "bias_log_hybrid": -0.00033495353598704276,
+  "bias_log_physics": 0.009896928148941645
+ },
+ "held_out_rides": {
+  "n_segments": 142291,
+  "mae_log_hybrid": 0.060049436871945375,
+  "mae_log_physics": 0.13596118898673604,
+  "bias_log_hybrid": 0.0006433051699180644,
+  "bias_log_physics": 0.01529114129256365,
+  "n_windows": 1502,
+  "window_km": 10.0,
+  "mae_pct_hybrid": 2.2376390404445266,
+  "mae_pct_physics": 7.892980803659889,
+  "p90_pct_hybrid": 5.1975530302537845,
+  "bias_pct_hybrid": -0.27047136375516695,
+  "bias_pct_physics": 1.1852879840911816
+ },
+ "held_out_athletes": {
+  "n_segments": 12976,
+  "mae_log_hybrid": 0.14431184257222326,
+  "mae_log_physics": 0.3093786693429601,
+  "bias_log_hybrid": 0.07494141201311194,
+  "bias_log_physics": 0.08912386712681421,
+  "n_windows": 155,
+  "window_km": 10.0,
+  "mae_pct_hybrid": 4.033639139549347,
+  "mae_pct_physics": 13.624670836490555,
+  "p90_pct_hybrid": 8.766513702973668,
+  "bias_pct_hybrid": -1.2109059522749468,
+  "bias_pct_physics": 7.627566029040343
+ },
+ "n_segments": 720065,
+ "n_athletes": 17,
+ "trained_at": "2026-11-16 18:45"
+}
