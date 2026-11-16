@@ -1,0 +1,23 @@
+0dba933f  M 1967  sorties 188  masse  84.0 kg  CP   321 W (3.83 W/kg)  W'  19.8 kJ  R2 0.999  W'bal min/W' sur 6 sorties max : -0.13 (min -0.42)
+200eed96  M 1974  sorties 171  masse  81.0 kg  CP   257 W (3.17 W/kg)  W'  16.3 kJ  R2 0.999  W'bal min/W' sur 5 sorties max : -0.09 (min -0.40)
+2bff94e2  M 2068  sorties 144  masse  75.0 kg  CP   195 W (2.60 W/kg)  W'  14.8 kJ  R2 0.999  W'bal min/W' sur 5 sorties max : -0.39 (min -0.68)
+309b92a0  M 1999  sorties 157  masse  95.0 kg  CP   269 W (2.83 W/kg)  W'  21.6 kJ  R2 0.999  W'bal min/W' sur 6 sorties max : -0.34 (min -0.68)
+320bc6cd  M 1975  sorties 281  masse  89.8 kg  CP   305 W (3.40 W/kg)  W'  27.1 kJ  R2 0.993  W'bal min/W' sur 4 sorties max : -0.07 (min -0.50)
+3ddca2a2  M 1975  sorties 121  masse  80.8 kg  CP   191 W (2.37 W/kg)  W'  12.1 kJ  R2 1.000  W'bal min/W' sur 5 sorties max : -0.28 (min -0.65)
+3fb08672  M 1957  sorties 221  masse  85.0 kg  CP   224 W (2.64 W/kg)  W'  13.2 kJ  R2 1.000  W'bal min/W' sur 4 sorties max : -0.37 (min -0.60)
+6203164b  M 1968  sorties  86  masse  74.0 kg  CP   218 W (2.95 W/kg)  W'  17.0 kJ  R2 0.999  W'bal min/W' sur 4 sorties max : -0.16 (min -0.40)
+62ee9e8e  M 1969  sorties 381  masse  82.5 kg  CP   269 W (3.26 W/kg)  W'  27.0 kJ  R2 0.995  W'bal min/W' sur 3 sorties max : -0.45 (min -0.49)
+9d92d726  M 1972  sorties  14  masse  68.0 kg  CP   235 W (3.46 W/kg)  W'   0.1 kJ  R2 1.000  W'bal min/W' sur 1 sorties max : -0.71 (min -0.71)
+9e46e144  M 1989  sorties  74  masse  72.0 kg  CP   432 W (6.00 W/kg)  W'  36.5 kJ  R2 0.997  W'bal min/W' sur 1 sorties max : -0.50 (min -0.50)
+ae4b2ab7  M 1951  sorties 339  masse  77.1 kg  CP   238 W (3.08 W/kg)  W'  12.1 kJ  R2 0.999  W'bal min/W' sur 2 sorties max : -0.84 (min -1.01)
+d5dccc49  M 1976  sorties 471  masse  69.9 kg  CP   259 W (3.71 W/kg)  W'  17.6 kJ  R2 0.999  W'bal min/W' sur 6 sorties max : -0.12 (min -0.30)
+edecc019  M 1984  sorties 188  masse  70.0 kg  CP   226 W (3.22 W/kg)  W'   5.6 kJ  R2 1.000  W'bal min/W' sur 3 sorties max : -0.53 (min -0.72)
+f1dc217c  M 1958  sorties 123  masse  78.0 kg  CP   222 W (2.84 W/kg)  W'  10.4 kJ  R2 1.000  W'bal min/W' sur 3 sorties max : -0.40 (min -0.44)
+fead7df2  M 2000  sorties 577  masse  80.0 kg  CP   332 W (4.15 W/kg)  W'  28.9 kJ  R2 0.998  W'bal min/W' sur 3 sorties max : -0.34 (min -0.59)
+
+Athletes retenus (R2 > 0,98, >= 20 sorties) : 15 / 16
+CP/kg : mediane 3.17, plage 2.37 - 6.00 W/kg
+W'    : mediane 17.0 kJ, plage 5.6 - 36.5 kJ (228 J/kg median)
+W'bal min / W' sur les sorties maximales : mediane -0.31, IQR [-0.44, -0.09], n = 61
+Lecture : 0 = le modele vide exactement W' a l'effort maximal ; < 0 = W' sous-estime ou CP surestime.
+Figure : reports/figures/opendata_physiology.png

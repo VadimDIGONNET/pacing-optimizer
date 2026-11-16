@@ -1,0 +1,82 @@
+Parametres virages : a_lat 8.0 m/s2, largeur 6.0 m
+
+  Ewen Costiou          : masse inconnue, ignore
+  Lenny Martinez        : masse inconnue, ignore
+=== Puissances impliquees par secteur (hypotheses : CdA par morphologie, Crr 0,0032, velo 8,5 kg) ===
+km_start           0.0         4.8   9.7   18.1
+km_end             4.8   9.7   9.7   18.1  26.1
+rider                                          
+Florian Lipowitz  453.0   NaN 431.0 434.0   NaN
+Mattias Skjelmose 443.0   NaN 422.0 425.0 454.0
+Paul Seixas         NaN 424.0   NaN 435.0 456.0
+Remco Evenepoel   456.0   NaN 457.0 402.0 453.0
+Tadej Pogacar     466.0   NaN 463.0 415.0 438.0
+
+=== Coureurs : CP calee (min W'bal = 0, W' 25 kJ), puissance moyenne, meteo ===
+               rider  mass_kg  cda  n_checkpoints  cp_w  cp_wkg  avg_power_w  headwind_mean_ms  rho_mean
+       Filippo Ganna     82.0  0.3              1   NaN     NaN        490.6              -0.3       1.1
+      Joshua Tarling     78.0  0.3              1   NaN     NaN        482.3              -0.2       1.1
+          Daan Hoole     81.0  0.2              1   NaN     NaN        469.8              -0.2       1.1
+     Pablo Castrillo     74.0  0.2              1   NaN     NaN        452.7              -0.4       1.1
+      Bruno Armirail     71.0  0.2              1   NaN     NaN        450.4              -0.3       1.1
+     Mattia Cattaneo     68.0  0.2              2 422.6     6.2        445.1              -0.4       1.1
+       Tadej Pogacar     66.0  0.2              4 438.6     6.6        440.3              -0.5       1.1
+     Thymen Arensman     68.0  0.2              1   NaN     NaN        438.4              -0.4       1.1
+     Remco Evenepoel     63.0  0.2              4 429.8     6.8        437.9              -0.5       1.1
+         Paul Seixas     64.0  0.2              3 417.4     6.5        437.3              -0.4       1.1
+   Mattias Skjelmose     65.0  0.2              4 417.9     6.4        436.6              -0.4       1.1
+    Matteo Jorgenson     70.0  0.2              1   NaN     NaN        424.2              -0.4       1.1
+  Thibault Guernalec     71.0  0.2              1   NaN     NaN        420.5              -0.3       1.1
+      Isaac del Toro     64.0  0.2              2 404.3     6.3        419.4              -0.4       1.1
+           Huub Artz     69.0  0.2              1   NaN     NaN        418.0              -0.2       1.1
+Felix Grossschartner     64.0  0.2              1   NaN     NaN        399.2              -0.4       1.1
+          Juan Ayuso     65.0  0.2              1   NaN     NaN        397.1              -0.4       1.1
+         Tom Pidcock     58.0  0.2              1   NaN     NaN        368.7              -0.4       1.1
+    Florian Lipowitz     68.0  0.2              3 420.7     6.2        304.1              -0.4       1.1
+
+=== Validation par pointage omis (hypothese : puissance constante sur le secteur fusionne) ===
+            rider   km  t_real_s  t_pred_s  err_s  err_pct_sector
+ Florian Lipowitz  4.8     512.0     520.5    8.5             0.8
+ Florian Lipowitz  9.7    1003.0    1002.6   -0.4            -0.0
+   Isaac del Toro  4.8     509.0     520.3   11.3             0.6
+  Mattia Cattaneo  9.7    1034.0    1021.5  -12.5            -0.6
+Mattias Skjelmose  4.8     509.0     516.8    7.8             0.8
+Mattias Skjelmose  9.7     997.0     996.4   -0.6            -0.1
+Mattias Skjelmose 18.1    1466.0    1461.8   -4.2            -0.4
+      Paul Seixas  9.7    1007.0    1004.7   -2.3            -0.2
+      Paul Seixas 18.1    1476.0    1473.0   -3.0            -0.3
+  Remco Evenepoel  4.8     488.0     487.6   -0.4            -0.0
+  Remco Evenepoel  9.7     942.0     951.1    9.1             1.0
+  Remco Evenepoel 18.1    1410.0    1402.7   -7.3            -0.7
+    Tadej Pogacar  4.8     494.0     495.1    1.1             0.1
+    Tadej Pogacar  9.7     956.0     963.9    7.9             0.8
+    Tadej Pogacar 18.1    1425.0    1421.7   -3.3            -0.3
+
+MAE : 5.3 s, 0.45 % du temps de secteur (n = 15)
+MAE par pointage :
+      mae_s  mae_pct  bias_s  n
+km                             
+4.8     5.8      0.5     5.7  5
+9.7     5.5      0.5     0.2  6
+18.1    4.4      0.4    -4.4  4
+
+=== Evenepoel : puissance impliquee par secteur selon a_lat (non identifiable sur la descente) ===
+ a_lat  P 0.0-4.8  P 4.8-9.7  P 9.7-18.1  P 18.1-26.1
+   4.0      456.0      457.0       597.0        514.0
+   5.0      456.0      457.0       508.0        490.0
+   6.0      456.0      457.0       458.0        472.0
+   8.0      456.0      457.0       402.0        453.0
+  10.0      456.0      457.0       369.0        444.0
+  99.0      456.0      457.0       294.0        429.0
+
+=== Choix de a_lat : erreur de validation selon la limite de virage ===
+  a_lat   5.0 : MAE   9.7 s (0.82 %), biais km 9,7 -17.8 s, CP Evenepoel 449 W
+  a_lat   6.0 : MAE   6.0 s (0.48 %), biais km 9,7 -10.0 s, CP Evenepoel 435 W
+  a_lat   8.0 : MAE   5.3 s (0.45 %), biais km 9,7  +0.2 s, CP Evenepoel 430 W
+  a_lat  10.0 : MAE   7.8 s (0.72 %), biais km 9,7  +6.8 s, CP Evenepoel 430 W
+  a_lat  99.0 : MAE  18.7 s (1.72 %), biais km 9,7 +25.2 s, CP Evenepoel 430 W
+
+=== Sensibilite au CdA (Evenepoel, a_lat par defaut) ===
+  CdA 0.19 : 446 W, 445 W, 354 W, 412 W ; CP 419 W (6.65 W/kg)
+  CdA 0.21 : 456 W, 457 W, 402 W, 453 W ; CP 430 W (6.82 W/kg)
+  CdA 0.23 : 465 W, 469 W, 452 W, 494 W ; CP 452 W (7.18 W/kg)

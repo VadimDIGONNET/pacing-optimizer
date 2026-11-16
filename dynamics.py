@@ -149,24 +149,68 @@ def effective_radius(seg, width_m: float) -> np.ndarray:
     return r_eff
 
 
-def speed_limit_profile(seg, params: DynamicsParams, rider: Rider | None = None):
-    """Plafond de vitesse aux noeuds (n+1) et par segment (n).
+def fine_grid(seg, substep_m: float):
+    """Grille fine : pour chaque segment, k_i sous-pas de longueur L_i / k_i.
+    Renvoie (k par segment, distance des noeuds fins (N+1), indice de segment
+    de chaque sous-pas (N))."""
+    k = np.maximum(np.ceil(seg.length_m / substep_m).astype(int), 1)
+    ds = np.repeat(seg.length_m / k, k)
+    s_nodes = np.concatenate([[0.0], np.cumsum(ds)])
+    seg_idx = np.repeat(np.arange(seg.n), k)
+    return k, s_nodes, seg_idx
 
-    Passe arriere : v_lim[i] = min(v_virage(i), sqrt(v_lim[i+1]^2 + 2 a L_i)),
-    avec a = a_brake + g sin(theta) (la pente aide ou gene le freinage).
-    Le plafond de virage d'un segment s'applique aux deux noeuds qui le bordent.
+
+def fine_speed_cap(seg, s_nodes, params: DynamicsParams) -> np.ndarray:
+    """Plafond de vitesse en virage a chaque noeud fin.
+
+    Avec une table de virages (course_io), le plafond ne s'applique qu'a
+    l'emprise du virage [s_start, s_end], avec le rayon de trajectoire tendue.
+    Sans table (Course v1 ou rayon seul), on retombe sur le rayon minimal du
+    segment applique a tout le segment.
     """
-    n = seg.n
-    v_corner = np.minimum(corner_speed_limit(effective_radius(seg, params.road_width_m),
-                                             params.a_lat_max), params.v_cap)
-    v_node = np.full(n + 1, params.v_cap)
-    v_node[:-1] = np.minimum(v_node[:-1], v_corner)
-    v_node[1:] = np.minimum(v_node[1:], v_corner)
+    cap = np.full(len(s_nodes), params.v_cap)
+    corners = getattr(seg, "corners", None)
+    if corners and params.road_width_m > 0.0:
+        for c in corners:
+            R = racing_line_radius(c["r_min_m"], c["turn_deg"], params.road_width_m)
+            m = (s_nodes >= c["s_start_m"]) & (s_nodes <= c["s_end_m"])
+            if not m.any():
+                m[min(np.searchsorted(s_nodes, c["s_start_m"]), len(s_nodes) - 1)] = True
+            cap[m] = np.minimum(cap[m], np.sqrt(params.a_lat_max * R))
+    elif corners:
+        for c in corners:
+            m = (s_nodes >= c["s_start_m"]) & (s_nodes <= c["s_end_m"])
+            cap[m] = np.minimum(cap[m], np.sqrt(params.a_lat_max * c["r_min_m"]))
+    else:
+        v_seg = corner_speed_limit(seg.radius_m, params.a_lat_max)
+        idx = np.clip(np.searchsorted(seg.dist_m, s_nodes, side="right") - 1, 0, seg.n - 1)
+        cap = np.minimum(cap, v_seg[idx])
+        cap[1:] = np.minimum(cap[1:], v_seg[idx[:-1]])
+    return cap
+
+
+def fine_speed_limit(seg, params: DynamicsParams):
+    """Passe arriere sur la grille fine : plafond de vitesse tenant compte de la
+    capacite de freinage (a_brake + g sin theta). Renvoie (s_nodes, v_lim, seg_idx)."""
+    _, s_nodes, seg_idx = fine_grid(seg, params.substep_m)
+    cap = fine_speed_cap(seg, s_nodes, params)
     theta = np.arctan(seg.grade)
-    a_eff = np.maximum(params.a_brake_max + G * np.sin(theta), 0.5)
-    for i in range(n - 1, -1, -1):
-        v_node[i] = min(v_node[i], np.sqrt(v_node[i + 1] ** 2 + 2.0 * a_eff[i] * seg.length_m[i]))
-    return v_node, v_corner
+    a_eff = np.maximum(params.a_brake_max + G * np.sin(theta), 0.5)[seg_idx]
+    ds = np.diff(s_nodes)
+    v = cap.copy()
+    for j in range(len(ds) - 1, -1, -1):
+        v[j] = min(v[j], np.sqrt(v[j + 1] ** 2 + 2.0 * a_eff[j] * ds[j]))
+    return s_nodes, v, seg_idx
+
+
+def speed_limit_profile(seg, params: DynamicsParams, rider: Rider | None = None):
+    """Plafond de vitesse aux noeuds de segments (n+1) et par segment (n),
+    lu sur la grille fine (compatibilite avec l'API initiale de la phase 3)."""
+    s_nodes, v_lim, seg_idx = fine_speed_limit(seg, params)
+    v_node = np.interp(seg.dist_m, s_nodes, v_lim)
+    v_seg = np.full(seg.n, params.v_cap)
+    np.minimum.at(v_seg, seg_idx, v_lim[1:])
+    return v_node, v_seg
 
 
 # ---------------------------------------------------------------------------
@@ -189,37 +233,31 @@ def simulate_dynamic(powers, seg, rider: Rider, env: Environment,
     n = seg.n
     course = Course(seg.length_m.copy(), seg.grade.copy())
     m_eff = rider.mass + params.wheel_inertia_kg
-    v_node_lim, v_corner = speed_limit_profile(seg, params)
-    theta = np.arctan(seg.grade)
-    a_eff = np.maximum(params.a_brake_max + G * np.sin(theta), 0.5)
+    s_nodes, v_lim, seg_idx = fine_speed_limit(seg, params)
+    ds_all = np.diff(s_nodes)
+    v_corner_seg = np.full(n, params.v_cap)
+    np.minimum.at(v_corner_seg, seg_idx, v_lim[1:])
 
     if params.v_start is None:
-        e0 = env.at(0)
-        v = min(speed_from_power(powers[0], seg.grade[0], rider, e0), v_node_lim[0])
+        v = min(speed_from_power(powers[0], seg.grade[0], rider, env.at(0)), v_lim[0])
     else:
-        v = min(float(params.v_start), v_node_lim[0])
+        v = min(float(params.v_start), v_lim[0])
     v = max(v, 0.5)
 
-    seg_time = np.zeros(n); seg_dist_over_v = np.zeros(n)
-    applied = np.zeros(n); braking = np.zeros(n, bool)
-    trace_s, trace_v = [0.0], [v]
+    seg_time = np.zeros(n); applied = np.zeros(n); braking = np.zeros(n, bool)
+    trace_v = np.full(len(s_nodes), v) if keep_trace else None
     wbal = rider.w_prime; min_wbal = wbal; wbal_track = np.zeros(n)
-    s_global = 0.0
 
+    j = 0
     for i in range(n):
         e = env.at(i)
         rho, wind = float(e.rho), float(e.wind_ms)
-        L = seg.length_m[i]; grade = seg.grade[i]; p_req = powers[i]
-        k = max(int(np.ceil(L / params.substep_m)), 1)
-        ds = L / k
+        grade = seg.grade[i]; p_req = powers[i]
         t_seg = 0.0; work = 0.0
-        v_next_node = v_node_lim[i + 1]
-        v_cap_seg = min(v_corner[i], params.v_cap)
-        for j in range(k):
-            remaining = L - (j + 1) * ds
-            v_lim_end = min(v_cap_seg, np.sqrt(v_next_node ** 2 + 2.0 * a_eff[i] * remaining))
+        while j < len(ds_all) and seg_idx[j] == i:
+            ds = ds_all[j]
+            v_lim_end = v_lim[j + 1]
             f_res = resistive_force(v, grade, rider, rho, wind)
-            # vitesse atteinte en roue libre puis avec la puissance demandee
             v2_coast = v * v - 2.0 * f_res * ds / m_eff
             drive = p_req * DRIVETRAIN_EFF / max(v, 0.5)
             v2_pow = v * v + 2.0 * (drive - f_res) * ds / m_eff
@@ -239,13 +277,12 @@ def simulate_dynamic(powers, seg, rider: Rider, env: Environment,
             dt = 2.0 * ds / (v + v_new)
             t_seg += dt; work += p_app * dt
             v = v_new
-            s_global += ds
+            j += 1
             if keep_trace:
-                trace_s.append(s_global); trace_v.append(v)
+                trace_v[j] = v
 
         seg_time[i] = t_seg
         applied[i] = work / t_seg
-        # bilan de W' (Skiba) sur la puissance appliquee moyenne du segment
         p_bar = applied[i]
         if p_bar > rider.cp:
             wbal -= (p_bar - rider.cp) * t_seg
@@ -257,9 +294,10 @@ def simulate_dynamic(powers, seg, rider: Rider, env: Environment,
     return DynamicResult(
         powers=powers, applied_power=applied, time_s=float(seg_time.sum()),
         seg_time_s=seg_time, speed_ms=seg.length_m / seg_time,
-        v_limit_ms=np.minimum(v_corner, params.v_cap), braking=braking,
+        v_limit_ms=v_corner_seg, braking=braking,
         wbal_j=wbal_track, min_wbal_j=float(min_wbal), course=course,
-        trace_s=np.array(trace_s), trace_v=np.array(trace_v),
+        trace_s=s_nodes if keep_trace else np.zeros(0),
+        trace_v=trace_v if keep_trace else np.zeros(0),
     )
 
 
