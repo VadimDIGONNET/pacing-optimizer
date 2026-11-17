@@ -4,6 +4,15 @@ Power pacing for cycling time trials and triathlon bike legs, validated on real 
 
 Version 2 replays the Tour de France 2026 stage 16 time trial (Évian to Thonon, 26.1 km) from public data and measures how well the model predicts withheld split times. Full report: `reports/tdf2026_stage16.html`.
 
+![Dashboard: optimal power plan for stage 16](reports/figures/dashboard_plan.png)
+
+## For a team
+
+- A predicted finish time for a rider on any GPX course, at a given date and start time, with the error measured on data the model never saw: about 1.2 % on 10 km windows for known athletes, 1.7 % for unknown ones, 6 s per checkpoint on the Tour de France stage 16 professionals.
+- A block-by-block power plan that respects the rider's W' everywhere, exportable to a head unit, and the time it buys against constant power or against what the rider actually did.
+- Every number traceable: measured data with its source, assumptions listed with their sensitivity, and validation tables in the dashboard itself.
+- The model improves with each power file a team adds; the pipeline is built to ingest them.
+
 ## What it does
 
 1. **Course from GPX** (`course_io.py`). Geodesic distance, Savitzky-Golay elevation smoothing (250 m window), 50 m segments with grade, heading and curvature. Corners are detected from the net heading change over 40 m, which is robust to GPS noise. An Open-Meteo terrain query serves as an independent elevation check.
