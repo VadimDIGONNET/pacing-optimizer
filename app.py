@@ -366,9 +366,9 @@ with tab_pred:
             (p90 {ho.get('p90_pct_hybrid', float('nan')):.2f} %). Il ne connaît ni le vent du jour ni les virages : la physique dynamique reste la
             référence pour le plan, le modèle appris donne l'intervalle réaliste.</div>""", unsafe_allow_html=True)
         if hyb and out_of_domain:
-            st.markdown(f"""<div class="note"><b>Coureur hors du domaine d'entraînement.</b> Le modèle appris a vu des athlètes jusqu'à
+            st.markdown(f"""<div class="note"><b>Coureur à la limite du domaine d'entraînement.</b> Le modèle appris a vu des athlètes jusqu'à
             {domain['wkg_max']:.1f} W/kg de CP et un CdA minimal de {domain['cda_min']:.2f} m² ({domain['n']} profils). À {cp / mass_rider:.1f} W/kg
-            et {cda:.2f} m², sa prédiction est une extrapolation : sur les pointages pro de l'étape 16 elle est biaisée de
+            et {cda:.2f} m², sa prédiction extrapole : sur les pointages pro de l'étape 16 elle est biaisée de
             {tables['stage16_loo_hybrid'][tables['stage16_loo_hybrid'].model == 'hybride'].err_s.mean():+.0f} s par pointage
             (physique dynamique : {tables['stage16_loo_hybrid'][tables['stage16_loo_hybrid'].model == 'physique'].err_s.mean():+.0f} s).
             Le plan et le temps de référence restent ceux de la physique dynamique.</div>""" if "stage16_loo_hybrid" in tables else
@@ -442,10 +442,12 @@ with tab_val:
         comp.columns = ["Modèle", "MAE (s)", "MAE (% secteur)", "Biais (s)", "n"]
         c1, c2 = st.columns([2, 3])
         c1.dataframe(comp, hide_index=True, use_container_width=True)
-        c2.markdown("""<div class="note">Le modèle appris est entraîné sur des amateurs et des cyclistes entraînés (2 à 6 W/kg), sans vent ni
-        virages explicites. Sur des professionnels à 6,5 W/kg il extrapole et prédit des montées trop lentes : la physique calibrée reste
-        la référence pour l'élite, le modèle appris apporte sa précision dans son domaine (sorties inconnues : voir ci-dessus) et
-        s'améliore avec chaque athlète ajouté au jeu.</div>""", unsafe_allow_html=True)
+        c2.markdown(f"""<div class="note">Même protocole, mêmes coureurs : le modèle appris atteint
+        {comp.iloc[0, 1] if comp.iloc[0, 0] == 'hybride' else comp.iloc[1, 1]:.1f} s d'erreur sans connaître le vent ni les virages du jour,
+        contre {comp.iloc[1, 1] if comp.iloc[0, 0] == 'hybride' else comp.iloc[0, 1]:.1f} s pour la physique calibrée sur cette étape.
+        Il a été entraîné sur des athlètes de 2 à 6 W/kg : les professionnels sont à la limite de son domaine, et son erreur a été
+        divisée par presque trois en passant de 17 à 241 athlètes. Plus de données, en particulier des fichiers de puissance
+        d'équipe, le rapprochent encore.</div>""", unsafe_allow_html=True)
 
     if "stage16_strategies" in tables:
         s16 = tables["stage16_strategies"]

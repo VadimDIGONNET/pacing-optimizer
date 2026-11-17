@@ -36,6 +36,11 @@ def main():
     trade = pd.read_csv(TAB / "stage16_descent_tradeoff.csv")
     plan = pd.read_csv(TAB / "stage16_plan_evenepoel.csv")
     phys = pd.read_csv(ROOT / "data/processed/opendata_cp_wprime.csv")
+    import json
+    mp = ROOT / "models/metrics.json"
+    ml = json.load(open(mp)) if mp.exists() else None
+    lh_p = TAB / "stage16_loo_hybrid.csv"
+    lh = pd.read_csv(lh_p) if lh_p.exists() else None
 
     full = sectors[sectors.rider.isin(sectors.groupby("rider").size()[lambda s: s >= 3].index)]
     piv = full.pivot_table(index="rider", columns=["km_start", "km_end"], values="power_w").round(0)
@@ -64,6 +69,25 @@ def main():
         columns={"km_start": "km start", "km_end": "km end", "grade_pct": "Grade (%)", "power_w": "Target (W)",
                  "speed_kmh": "Speed (km/h)", "time_s": "Time (s)", "wbal_end_kj": "W'bal end (kJ)", "braking": "Braking"})
 
+    ml_section = ""
+    if ml:
+        hr, ha = ml["held_out_rides"], ml["held_out_athletes"]
+        rows = pd.DataFrame([
+            {"Test set": "Unseen rides of known athletes", "10 km windows": hr["n_windows"], "Physics only": f"{hr['mae_pct_physics']:.2f} %",
+             "Learned model": f"{hr['mae_pct_hybrid']:.2f} %", "p90": f"{hr['p90_pct_hybrid']:.2f} %", "Bias": f"{hr['bias_pct_hybrid']:+.2f} %"},
+            {"Test set": "Unseen athletes", "10 km windows": ha["n_windows"], "Physics only": f"{ha['mae_pct_physics']:.2f} %",
+             "Learned model": f"{ha['mae_pct_hybrid']:.2f} %", "p90": f"{ha['p90_pct_hybrid']:.2f} %", "Bias": f"{ha['bias_pct_hybrid']:+.2f} %"}])
+        pro = ""
+        if lh is not None:
+            g = lh.groupby("model").agg(mae=("err_s", lambda e: e.abs().mean()), pct=("err_pct_sector", lambda e: e.abs().mean()), bias=("err_s", "mean"))
+            pro = (f"<p>Same leave-one-checkpoint-out protocol on the stage 16 professionals: <b>{g.loc['hybride', 'mae']:.1f} s</b> "
+                   f"({g.loc['hybride', 'pct']:.2f} %, bias {g.loc['hybride', 'bias']:+.1f} s) for the learned model, without wind or corners, "
+                   f"against {g.loc['physique', 'mae']:.1f} s for the physics calibrated on this stage. With 17 training athletes the learned "
+                   f"model was at 16.2 s: the improvement came from data volume alone.</p>")
+        ml_section = (f"<p>{ml['n_segments']:,} time-trial-like segments of 200 m from {ml['n_athletes']} GoldenCheetah OpenData athletes "
+                      f"(power meter, 1 Hz, CC0). Each athlete's CdA and Crr are fitted from their own rides; a gradient boosting model then learns "
+                      f"the residual between observed speed and the Martin model, from inputs known when planning a race only. The athlete is never "
+                      f"a feature: the model must generalise to riders it has not seen. Time error on 10 km windows:</p>{table(rows)}{pro}")
     css = """
     body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:1000px;margin:40px auto;padding:0 20px;color:#1F2937;line-height:1.5}
     h1{font-size:28px;margin-bottom:0} h2{margin-top:40px;border-bottom:2px solid #0F766E;padding-bottom:4px;font-size:21px}
@@ -135,7 +159,9 @@ W' depletion, so a CP fitted with "W'bal = 0 at exhaustion" is conservative. The
 upper end of the amateur range, consistent with the 36 kJ of the strongest athlete in the sample (6.0 W/kg).</p>
 {img("opendata_physiology.png")}
 
-<h2>6. Strategies: real, constant and optimal</h2>
+<h2>6. Learned model: physics corrected by {ml["n_athletes"] if ml else 0} athletes of real data</h2>
+{ml_section}
+<h2>7. Strategies: real, constant and optimal</h2>
 <p>For each rider: CP fitted so that their reconstructed effort empties W' exactly; "constant" is the highest constant
 power that keeps W'bal positive everywhere (the binding point is the summit, not the finish); "optimal" is the block
 plan (500 m blocks, sections cut at km 9.64, 10.9 and 17.0) that minimises time under the same constraint. Riders without
@@ -145,7 +171,7 @@ intermediate splits only have a finish time, so their real strategy is unknown.<
 <p>Evenepoel's plan, block by block (target power; applied power is lower in braking zones):</p>
 {table(plan_tab)}
 
-<h2>7. Limits</h2>
+<h2>8. Limits</h2>
 <ul>
 <li>Intermediate splits are available for the top 5 at each checkpoint only. ProCyclingStats and the official site hold
 the full set but forbid automated access; the pipeline accepts a manual export.</li>

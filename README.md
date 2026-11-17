@@ -23,14 +23,14 @@ The v1 engine (`pacing_model.py`: `Rider`, `Environment`, `Course`, `simulate`, 
 
 `ml_model.py` fits each athlete's CdA and Crr from their own segments (the physical profile), then trains a gradient boosting model (scikit-learn HistGradientBoosting) on the residual between observed speed and the Martin-model speed, using only inputs known when planning a race. The athlete identity is never a feature, so the model must generalise to unseen riders. Prediction on a course chains the entry speed from one segment to the next.
 
-Current training set: 774,396 time-trial-like segments from 24 athletes (the stream keeps adding athletes; retrain with `python examples/train_hybrid.py`).
+Current training set: 6,131,613 time-trial-like segments from 234 athletes, 50,644 rides and 2.36 million km (`python dataset.py 250`; retrain with `python examples/train_hybrid.py`).
 
 | Test set | 10 km windows | Time error, physics only | Time error, learned model | p90 | Bias |
 |---|---|---|---|---|---|
-| Unseen rides of known athletes | 215 | 5.09 % | **0.78 %** | 1.83 % | +0.08 % |
-| Unseen athletes | 17 | 16.36 % | **3.27 %** | 5.13 % | -0.46 % |
+| Unseen rides of known athletes | 1064 | 9.57 % | **1.17 %** | 2.70 % | +0.39 % |
+| Unseen athletes | 1146 | 9.87 % | **1.74 %** | 3.43 % | +0.43 % |
 
-On the stage 16 professionals, under the same leave-one-checkpoint-out protocol, the learned model is worse than the calibrated physics (16.2 s against 5.3 s, bias +15.7 s): riders at 6.5 W/kg with a 0.21 m² CdA are outside the training domain (2 to 6 W/kg, CdA above 0.3) and the model has no wind or corners. The dashboard flags this: the physics plan stays the reference for elite riders, the learned model gives its interval inside its domain and improves as athletes are added. Run `python examples/validate_hybrid_pro.py` to reproduce.
+On the stage 16 professionals, under the same leave-one-checkpoint-out protocol, the learned model reaches 6.2 s (0.53 % of sector time, bias +4.8 s) against 5.3 s (0.45 %) for the calibrated physics, without knowing the wind or the corners of the day. With 17 athletes it was at 16.2 s: the gain came from data volume, not from tuning. Riders at 6.5 W/kg remain at the edge of the training domain (2 to 6 W/kg), which the dashboard flags. Run `python examples/validate_hybrid_pro.py` to reproduce.
 
 ## Results on Tour de France 2026, stage 16
 
