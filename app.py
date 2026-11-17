@@ -68,7 +68,7 @@ div[data-testid="stDataFrame"] { border:1px solid #1F2A44; border-radius:8px; }
 
 PLOT_LAYOUT = dict(template="plotly_dark", paper_bgcolor="#0B1220", plot_bgcolor="#0F172A",
                    font=dict(family="Inter", color="#CBD5E1", size=12), margin=dict(l=50, r=20, t=40, b=40),
-                   legend=dict(orientation="h", y=1.08, x=0), hovermode="x unified")
+                   legend=dict(orientation="h", y=-0.22, x=0), hovermode="x unified")
 
 
 def kpi(label, value, delta="", cls=""):
@@ -264,9 +264,10 @@ cards = [
 ]
 out_of_domain = bool(domain and (cp / mass_rider > domain["wkg_max"] or cda < domain["cda_min"]))
 if hyb:
+    p90 = ho.get("p90_pct_hybrid")
+    rng = f"{fmt(hyb['time_s'] * (1 - p90 / 100))} – {fmt(hyb['time_s'] * (1 + p90 / 100))}" if p90 else ""
     cards.append(kpi("Temps prédit, modèle appris", fmt(hyb["time_s"]),
-                     "hors du domaine d'entraînement : indicatif" if out_of_domain else
-                     (f"± {err_pct:.1f} % (athlètes inconnus, 10 km)" if err_pct else "modèle hybride"),
+                     (f"intervalle 90 % {rng} · limite du domaine" if out_of_domain else f"intervalle 90 % {rng}") if rng else "modèle hybride",
                      "warn" if out_of_domain else "muted"))
 cards.append(kpi("Gain vs puissance constante", f"{opt.gain_s:+.1f} s", f"constante {opt.p_constant:.0f} W → {fmt(opt.constant.time_s)}"))
 if real is not None:
