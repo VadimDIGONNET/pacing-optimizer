@@ -236,8 +236,19 @@ if bp_text.strip():
         breakpoints = None
 lam = {"faible": 1e-5, "moyen": 5e-5, "fort": 2e-4}[smooth]
 
+@st.cache_data(show_spinner=False, max_entries=32)
+def cached_optimisation(gpx_key, rider_tuple, rho_key, wind_key, a_lat, width, block_m, breakpoints, lam):
+    """Le plan optimal prend 10 a 30 s : on le met en cache sur l'ensemble des entrees."""
+    r = Rider(*rider_tuple)
+    return optimize_dynamic(seg, r, env, DynamicsParams(a_lat_max=a_lat, road_width_m=width),
+                            block_m=float(block_m), breakpoints_km=breakpoints, smooth_lambda=lam)
+
+
 with st.spinner("Optimisation du plan de puissance…"):
-    opt = optimize_dynamic(seg, rider, env, params, block_m=float(block_m), breakpoints_km=breakpoints, smooth_lambda=lam)
+    rider_tuple = (rider.mass_rider, rider.mass_bike, rider.crr, rider.cda, rider.cp, rider.w_prime, rider.p_max, rider.p_min)
+    opt = cached_optimisation(str(hash(seg.dist_m.tobytes()) ^ hash(seg.ele.tobytes())), rider_tuple,
+                              float(np.round(np.mean(env.rho), 4)), float(np.round(np.mean(np.atleast_1d(env.wind_ms)), 3)),
+                              a_lat, width, block_m, tuple(breakpoints) if breakpoints else None, lam)
 
 # Prediction hybride du plan optimal et du plan constant
 hyb = None
